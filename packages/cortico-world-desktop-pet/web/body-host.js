@@ -39,6 +39,8 @@ const TOUCHES = new Set(['poke', 'pet', 'grab', 'drop', 'throw', 'crash']);
  * Mac, where it is always on, that kept the GPU busy at 60 to 90 percent behind the whale.
  */
 const HALO_PAD = .4, HALO_REACH = 24;
+/** The halo's colour when the page names none: a light gray, the body's edge against a backdrop of its own colour. */
+const HALO_GREY = [184, 184, 184];
 
 const num = (v, fallback = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 const clampTo = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -188,12 +190,14 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
         return new Promise((done) => waits.set(s, done));
       },
       /**
-       * The light halo behind the body (pet-app's backdrop), as a CSS filter on the frame's window cut down to
-       * the body's surroundings (haloRect), so it blurs only those; a `k` or `reach` of 0 removes it. Called once a frame: it follows the body.
+       * The light halo behind the body (pet-app's backdrop, and the voice's glow), as a CSS filter on the
+       * frame's window cut down to the body's surroundings (haloRect), so it blurs only those; a `k` or
+       * `reach` of 0 removes it. `rgb` colours it; gray when the page names none. Called once a frame: it
+       * follows the body.
        */
-      setHalo(k, reach) {
+      setHalo(k, reach, rgb = HALO_GREY) {
         const r = k && reach > 0 ? haloRect(layout, size, reach, pack.effects?.reach) : null;
-        const c = r ? `rgba(184,184,184,${k.toFixed(2)})` : '';
+        const c = r ? `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${k.toFixed(2)})` : '';
         // two blurs, the inner one 3/7 of the outer (the halo's look at the default reach of 7)
         const inner = Math.max(1, Math.round(reach * 3 / 7));
         const at = r ? `${r.x},${r.y},${r.w},${r.h},${c},${reach}` : '';

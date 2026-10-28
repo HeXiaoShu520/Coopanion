@@ -1708,6 +1708,8 @@ export class DesktopPetWorld implements World {
     if (now - this.lastLevelAt >= 100) {
       this.lastLevelAt = now;
       this.voiceFrame({ type: 'level', level: this.level, speaking, open });
+      // the light on the body follows the person's voice while it is being heard
+      if (open) this.server.sendPet({ t: 'level', level: this.level });
     }
     if (open) this.schedulePack();
   }
@@ -1734,6 +1736,7 @@ export class DesktopPetWorld implements World {
           this.counts.dropped++;
           this.remember({ text: res.error ? this.ui.voice.failedLine(res.error) : text, at: Date.now(), ms: res.ms, dropped: true });
           this.voiceFrame({ type: 'dropped', text: res.error ?? text, ms: res.ms });
+          this.server.sendPet({ t: 'dropped' });
           // the page was showing this sentence as it was heard: take it back
           if (u.result) this.showHeard();
           continue;

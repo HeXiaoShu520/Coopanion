@@ -15,6 +15,7 @@ import { language, t, useLanguage } from './i18n.js';
 import { createSfx } from './sound.js';
 import { createSpeech, textSteps } from './speech.js';
 import { createVoiceOut } from './voice-out.js';
+import { createVoiceGlow } from './voice-glow.js';
 import { COO_CSS, PALETTES, mini, normalizeSkin, skinCss } from './coo/coo.js';
 import { loadBody } from './body-host.js';
 import { accentColors, announcePainted, bubbleCss, dressFloor, glowColor, lightWall, modeButton, setGlow } from './stage.js';
@@ -64,11 +65,14 @@ if (!host) {
 }
 /** The pack on screen, as /api/figures lists it: its colors light the wall in a tab. */
 let shownPack = null;
+/** Colour variables read off the page, by name; dropped when the theme or the pack's accent changes. */
+const tints = new Map();
 const lightFor = (s) => {
   if (!host) setGlow(document.body, glowColor(shownPack, s));
   const a = accentColors(shownPack, s);
   accentStyle.textContent = a ? `html:root{--skin-eye:${a.light}}@media (prefers-color-scheme: dark){html:root:not([data-theme="light"]){--skin-eye:${a.dark}}}html:root[data-theme="dark"]{--skin-eye:${a.dark}}` : '';
   bubbleStyle.textContent = bubbleCss(shownPack, s);
+  tints.clear();
 };
 
 const sfx = createSfx();
@@ -80,8 +84,22 @@ const speech = createSpeech(sfx, { onUnit: () => body?.talk() });
  */
 const voiceOut = createVoiceOut({
   onDone: (id) => send({ t: 'spoke', id }),
-  onFail: (id) => send({ t: 'spoke', id }),
+  onFail: (id) => { voiceGlow.fault(); send({ t: 'spoke', id }); },
 });
+
+/* ---------- the voice as light on the body ---------- */
+/** A colour variable of the page (`--skin-eye`, `--anger`) as `[r, g, b]`; its light value when the page names none, as coo.js does. */
+function tint(name, fallback) {
+  const known = tints.get(name);
+  if (known) return known;
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(getComputedStyle(document.documentElement).getPropertyValue(name).trim());
+  const h = hex ? (hex[1].length === 3 ? [...hex[1]].map((c) => c + c).join('') : hex[1]) : '';
+  const rgb = h ? [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)) : fallback;
+  tints.set(name, rgb);
+  return rgb;
+}
+/** Listening, thinking and reading aloud: Coo's body lights in its own colour (voice-glow.js); the words stay in the bubbles. */
+const voiceGlow = createVoiceGlow({ rgb: () => tint('--skin-eye', [0, 168, 112]), fault: () => tint('--anger', [229, 72, 77]) });
 if (host) sfx.unlock();
 else ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, () => sfx.unlock(), { capture: true }));
 
@@ -280,7 +298,7 @@ function applyPrefs(p) {
   if (p.speech && typeof p.speech === 'object') speech.configure(p.speech);
   // reading aloud: the World's pace and volume, applied to a reply already playing too
   if (p.tts && typeof p.tts === 'object') voiceOut.configure({ speed: p.tts.speed, volume: p.tts.volume });
-  if (p.theme === 'dark' || p.theme === 'light') { prefs.theme = p.theme; applyTheme(p.theme); modeBtn?.show(p.theme); body?.set({ theme: p.theme }); }
+  if (p.theme === 'dark' || p.theme === 'light') { prefs.theme = p.theme; applyTheme(p.theme); modeBtn?.show(p.theme); body?.set({ theme: p.theme }); tints.clear(); }
   if (typeof p.glow === 'number') prefs.glow = p.glow;
   if (typeof p.scale === 'number') { prefs.scale = p.scale; body?.set({ bounds: bounds() }); }
   if (typeof p.bubbleSize === 'number') { prefs.bubbleSize = p.bubbleSize; sizeVar('--bubble-size', p.bubbleSize); }
@@ -332,6 +350,10 @@ function onOrder(m) {
     // the same bubble's words, read aloud: pulled piece by piece from the World while they type
     case 'speak': voiceOut.speak(m.id, m.pieces); break;
     case 'speak-stop': voiceOut.stop(); break;
+    // how loud the person is, while the microphone is open: the light on the body follows it
+    case 'level': voiceGlow.level(m.level); break;
+    // a sentence of the reply was lost in transit: the light shows it
+    case 'dropped': voiceGlow.fault(); break;
     case 'ask': dropAsks(); queue.push({ kind: 'ask', id: m.id, question: m.question, options: m.options || [], own: m.own !== false }); holdRoam(20); break;
     case 'confirm': dropAsks(); queue.push({ kind: 'ask', confirm: true, id: m.id, question: m.question, options: m.options, own: false }); holdRoam(20); break;
     case 'walk': walk(m); break;
@@ -1787,8 +1809,11 @@ function stepBackdrop(dt) {
   }
   const k = backdrop.k + ((backdrop.on ? 1 : 0) - backdrop.k) * Math.min(1, dt * 6);
   backdrop.k = k < .005 ? 0 : k;
-  // the body is in its own frame: it takes the halo as a CSS filter
-  body?.setHalo(backdrop.k * HALO_STRENGTH, prefs.glow);
+  // the body is in its own frame: it takes the halo as a CSS filter. A photo-like backdrop asks for the
+  // sampled halo; the voice asks for its own light, in Coo's colour, which outshines it while it lasts (voice-glow.js)
+  const light = prefs.glow > 0 ? voiceGlow.next(dt, { listening: bodyState.listening, speaking: voiceOut.active, thinking: bodyState.thinking }) : null;
+  if (light) body?.setHalo(Math.max(light.k, backdrop.k * HALO_STRENGTH), Math.max(light.reach, prefs.glow), light.rgb);
+  else body?.setHalo(backdrop.k * HALO_STRENGTH, prefs.glow);
 }
 
 /* ---------- loop ---------- */

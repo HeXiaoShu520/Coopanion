@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { JSDOM } from 'jsdom';
 import { clamp, f, ICONS, linked } from '../packages/cortico-world-desktop-pet/web/ui.js';
 import { COO_CSS, mini, normalizeSkin, skinCss } from '../packages/cortico-world-desktop-pet/web/coo/coo.js';
+import { createVoiceGlow } from '../packages/cortico-world-desktop-pet/web/voice-glow.js';
 import { t } from '../packages/cortico-world-desktop-pet/web/i18n.js';
 
 const WEB = new URL('../packages/cortico-world-desktop-pet/web/', import.meta.url);
@@ -19,11 +20,14 @@ function page({ host = false, hash = '' } = {}) {
   if (host) win.petHost = {};
   const sockets = [];
   const bodyChanges = [];
+  /** What the page asked of the body's frame: halo opacity, reach and colour, one entry a frame. */
+  const halo = [];
   /** What the page asked of the reader of replies (voice-out.js), which needs an audio context to run. */
   const voice = [];
   const body = {
     layout: { busy: false, facing: 1, cursor: '', bubble: { x: 500, y: 400 } },
     set: (change) => bodyChanges.push(change), cue() {}, talk() {},
+    setHalo: (...args) => halo.push(args),
   };
   win.requestAnimationFrame = () => 0;
   win.WebSocket = class {
@@ -44,14 +48,15 @@ function page({ host = false, hash = '' } = {}) {
       configure: (opts) => voice.push(['configure', opts]),
     }),
     textSteps: () => 1,
+    createVoiceGlow,
     loadBody: async () => body, body,
     t, language: () => 'zh', useLanguage: async () => {},
     // the tab's stage (stage.js) is decoration the activity bubble does not depend on
     lightWall() {}, dressFloor() {}, modeButton: () => ({ show() {} }), glowColor: () => null, setGlow() {}, bindAppearance() {}, announcePainted() {},
     createMic: () => ({ start() {}, stop() {} }),
   };
-  win.eval(`const { applyTheme, clamp, f, ICONS, linked, COO_CSS, mini, normalizeSkin, skinCss, createSfx, createSpeech, createVoiceOut, textSteps, loadBody, t, language, useLanguage, lightWall, dressFloor, modeButton, glowColor, setGlow, bindAppearance, announcePainted, createMic } = window.deps;\n${source}\nbody = window.deps.body; window.page = { onOrder, openInput, closeBubble, step: (dt) => { T += dt; stepDialog(dt); stepLines(); stepStatus(); layout(dt); }, interactive: () => bubble.matches(UI_SELECTOR), lines: () => lines, overUi: (el) => el.matches(UI_SELECTOR), REPLIED_FADE, UNANSWERED_FADE, MAX_LINES };`);
-  return { ...win.page, bubble: win.document.querySelector('#bubble'), bodyChanges, doc: win.document, sockets, voice, win };
+  win.eval(`const { applyTheme, clamp, f, ICONS, linked, COO_CSS, mini, normalizeSkin, skinCss, createSfx, createSpeech, createVoiceOut, createVoiceGlow, textSteps, loadBody, t, language, useLanguage, lightWall, dressFloor, modeButton, glowColor, setGlow, bindAppearance, announcePainted, createMic } = window.deps;\n${source}\nbody = window.deps.body; window.page = { onOrder, openInput, closeBubble, step: (dt) => { T += dt; stepDialog(dt); stepLines(); stepStatus(); layout(dt); }, stepHalo: (dt) => stepBackdrop(dt), interactive: () => bubble.matches(UI_SELECTOR), lines: () => lines, overUi: (el) => el.matches(UI_SELECTOR), REPLIED_FADE, UNANSWERED_FADE, MAX_LINES };`);
+  return { ...win.page, bubble: win.document.querySelector('#bubble'), bodyChanges, halo, doc: win.document, sockets, voice, win };
 }
 
 describe('pet page connection', () => {
@@ -272,5 +277,50 @@ describe('replies read aloud', () => {
     expect(p.voice).toEqual([['configure', { speed: 1.2, volume: .5 }]]);
     p.onOrder({ t: 'prefs', sound: false });
     expect(p.voice.at(-1)).toEqual(['stop']);
+  });
+});
+
+describe('the voice as light on the body', () => {
+  const frames = (p, seconds) => { for (let i = 0; i < seconds * 20; i++) p.stepHalo(.05); };
+  /** A colour variable of the page, as the light takes it. */
+  const colour = (p, name) => [1, 3, 5].map((i) => parseInt(p.win.getComputedStyle(p.win.document.documentElement).getPropertyValue(name).trim().slice(i, i + 2), 16));
+
+  it('lights Coo while it hears, and leaves the body dark when the voice does nothing', () => {
+    const p = page();
+    p.stepHalo(.05);
+    expect(p.halo.at(-1)).toEqual([0, 7]);
+    p.onOrder({ t: 'listen', phase: 'start' });
+    p.onOrder({ t: 'level', level: -20 });
+    frames(p, 1);
+    const [k, reach, rgb] = p.halo.at(-1);
+    expect(rgb).toEqual(colour(p, '--skin-eye'));
+    expect(k).toBeGreaterThan(.2);
+    expect(reach).toBeGreaterThanOrEqual(10);
+    p.onOrder({ t: 'listen', phase: 'heard', text: '在吗' });
+    frames(p, 3);
+    expect(p.halo.at(-1)).toEqual([0, 7]);
+  });
+
+  it('turns the light red for a moment when a sentence is lost, then goes out', () => {
+    const p = page();
+    p.onOrder({ t: 'listen', phase: 'start' });
+    frames(p, .5);
+    expect(p.halo.at(-1)[2]).toEqual(colour(p, '--skin-eye'));
+    p.onOrder({ t: 'dropped' });
+    p.stepHalo(.05);
+    expect(p.halo.at(-1)[2]).toEqual(colour(p, '--anger'));
+    p.onOrder({ t: 'listen', phase: 'none' });
+    frames(p, 1);
+    expect(p.halo.at(-1)[2]).toEqual(colour(p, '--anger'));
+    frames(p, 3);
+    expect(p.halo.at(-1)).toEqual([0, 7]);
+  });
+
+  it('draws no light while the halo is switched off', () => {
+    const p = page();
+    p.onOrder({ t: 'prefs', glow: 0 });
+    p.onOrder({ t: 'listen', phase: 'start' });
+    frames(p, 1);
+    expect(p.halo.at(-1)).toEqual([0, 0]);
   });
 });
