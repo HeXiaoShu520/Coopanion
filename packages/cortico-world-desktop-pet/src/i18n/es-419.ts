@@ -113,7 +113,7 @@ const es419: Translation<PetText> = {
     },
     keywords: {
       title: 'Palabras que lo activan',
-      description: 'Una por línea, con la sintaxis del archivo de palabras clave de sherpa-onnx: los tokens del modelo separados por espacios, luego :puntaje #umbral y después de @ las palabras que lees, por ejemplo «▁小 ▁可 :2.0 #0.4 @小可». El modelo es un zipformer chino, así que los tokens siguen su vocabulario',
+      description: 'Una por línea, en pinyin como lo escribe el modelo: iniciales y finales separadas por espacios, y después de @ las palabras que lees. «x iǎo k ě @小可» activa con 小可',
     },
     threshold: {
       title: 'Sensibilidad',

@@ -113,7 +113,7 @@ const ko: Translation<PetText> = {
     },
     keywords: {
       title: '깨우는 말',
-      description: '한 줄에 하나씩, sherpa-onnx 키워드 파일 문법으로 씁니다: 모델의 토큰을 띄어 쓰고 이어서 :점수 #임계값, @ 뒤에 사람이 읽을 말을 씁니다. 예: "▁小 ▁可 :2.0 #0.4 @小可". 모델은 중국어 zipformer라 토큰은 그 어휘를 따릅니다',
+      description: '한 줄에 하나씩, 모델의 병음 표기로 씁니다: 성모와 운모를 띄어 쓰고 @ 뒤에 사람이 읽을 말을 씁니다. 예: "x iǎo k ě @小可"는 小可에서 깨어납니다',
     },
     threshold: {
       title: '민감도',

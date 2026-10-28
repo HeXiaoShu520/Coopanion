@@ -113,7 +113,7 @@ const fr: Translation<PetText> = {
     },
     keywords: {
       title: 'Mots qui le réveillent',
-      description: 'Un par ligne, avec la syntaxe du fichier de mots-clés de sherpa-onnx : les tokens du modèle séparés par des espaces, puis :score #seuil, et après @ les mots que tu lis, par exemple « ▁小 ▁可 :2.0 #0.4 @小可 ». Le modèle est un zipformer chinois, les tokens suivent son vocabulaire',
+      description: 'Un par ligne, en pinyin comme le modèle l’écrit : initiales et finales séparées par des espaces, et après @ les mots que tu lis. « x iǎo k ě @小可 » réveille sur 小可',
     },
     threshold: {
       title: 'Sensibilité',

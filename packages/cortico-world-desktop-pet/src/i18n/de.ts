@@ -113,7 +113,7 @@ const de: Translation<PetText> = {
     },
     keywords: {
       title: 'Wörter, die wecken',
-      description: 'Eines pro Zeile, in der Syntax der Keywords-Datei von sherpa-onnx: die Tokens des Modells durch Leerzeichen getrennt, dann :Wertung #Schwelle, und nach @ die Wörter, die du liest, etwa „▁小 ▁可 :2.0 #0.4 @小可“. Das Modell ist ein chinesischer Zipformer, die Tokens folgen seinem Vokabular',
+      description: 'Eines pro Zeile, in der Pinyin-Schreibweise des Modells: Anlaut und Auslaut durch Leerzeichen getrennt, nach @ die Wörter, die du liest. „x iǎo k ě @小可“ weckt bei 小可',
     },
     threshold: {
       title: 'Empfindlichkeit',

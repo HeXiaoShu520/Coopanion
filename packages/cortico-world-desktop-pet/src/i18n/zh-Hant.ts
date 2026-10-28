@@ -113,7 +113,7 @@ const zhHant: Translation<PetText> = {
     },
     keywords: {
       title: '喚醒的詞',
-      description: '一行一個，照 sherpa-onnx 關鍵詞檔案的寫法：模型的 token 用空格分開，接 :分數 #閾值，@ 之後是給人看的詞。例如「▁小 ▁可 :2.0 #0.4 @小可」。模型是中文 zipformer，token 要按它的詞表寫',
+      description: '一行一個，照模型的拼音寫法：聲母和韻母用空格隔開，@ 之後是給人看的詞。例如「x iǎo k ě @小可」叫醒的是小可',
     },
     threshold: {
       title: '靈敏度',

@@ -9,12 +9,15 @@
  * Face when ModelScope does not; the files are the same (their SHA-256 match).
  *
  * Archives are unpacked with the system `tar` (bsdtar on Windows and macOS reads zip too);
- * Linux zips go through `unzip`.
+ * Linux zips go through `unzip`. A `.tar.bz2` is expanded in process first: Windows' bsdtar carries
+ * no bzip2 of its own and asks for an external `bzip2`, which most machines do not have.
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import unbzip2 from 'unbzip2-stream';
 import { downloadFile, type DownloadOptions } from './download.ts';
 import { petText, type PetText } from '../i18n/index.ts';
 
@@ -71,21 +74,16 @@ export const WHISPER_MODEL: ModelSpec = {
 };
 
 /**
- * The wake word model: sherpa-onnx's zipformer keyword spotter over WenetSpeech, int8, about 3 MB
- * in all (Apache-2.0, export by k2-fsa). It comes as one archive rather than as four named files:
- * the export's names carry its epoch and chunk size, so what a file is gets read off the name's
- * start (`encoder…onnx`). Upstream publishes neither a size nor a digest for the archive that could
- * be pinned here, so what is checked is that every file arrived and is not empty.
+ * The wake word model: sherpa-onnx's zipformer keyword spotter over WenetSpeech, about 3 MB in all
+ * (Apache-2.0, export by k2-fsa). It comes as one archive rather than as four named files: the
+ * export's names carry its epoch and chunk size, so what a file is gets read off the name
+ * (`pickExport`). Upstream publishes neither a size nor a digest for the archive that could be
+ * pinned here, so what is checked is that every file arrived and is not empty.
  */
 export const KWS_MODEL: KwsModelSpec = {
   id: 'kws-zipformer-wenetspeech-3.3M-2024-01-01',
   archive: 'sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2',
-  files: [
-    { role: 'encoder', name: /^encoder[^/]*\.onnx$/ },
-    { role: 'decoder', name: /^decoder[^/]*\.onnx$/ },
-    { role: 'joiner', name: /^joiner[^/]*\.onnx$/ },
-    { role: 'tokens', name: /^tokens\.txt$/ },
-  ],
+  tokens: /^tokens\.txt$/,
   sources: [(file: string) => `https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/${file}`],
 };
 
@@ -136,13 +134,52 @@ function findByMatch(dir: string, match: RegExp, depth = 5): string | null {
   return null;
 }
 
+/** Every file under `dir`, five directories deep at most, `.partial` directories left out. */
+function filesUnder(dir: string, depth = 5): string[] {
+  if (!existsSync(dir) || depth < 0) return [];
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isFile()) out.push(full);
+    else if (entry.isDirectory() && !entry.name.endsWith('.partial')) out.push(...filesUnder(full, depth - 1));
+  }
+  return out;
+}
+
+/** The roles the spotter loads, in the order a missing one is reported. */
+const KWS_ROLES = ['encoder', 'decoder', 'joiner', 'tokens'] as const;
+
+/** `encoder-epoch-99-avg-1-chunk-16-left-64.int8.onnx`: the role, the export it belongs to, and its cut. */
+const EXPORT = /^(encoder|decoder|joiner)-(.+?)(\.int8)?\.onnx$/;
+
+/**
+ * The encoder, decoder and joiner of one export. An archive ships two exports, each in a float and
+ * an int8 cut, and the three files the spotter loads must come from the same one: int8 first, then
+ * the newest epoch. Null when no export is complete.
+ */
+function pickExport(dir: string): Record<'encoder' | 'decoder' | 'joiner', string> | null {
+  const groups = new Map<string, Partial<Record<'encoder' | 'decoder' | 'joiner', string>>>();
+  for (const file of filesUnder(dir)) {
+    const m = EXPORT.exec(basename(file));
+    if (!m) continue;
+    const key = `${m[2]}${m[3] ? ' int8' : ''}`;
+    const group = groups.get(key) ?? {};
+    group[m[1] as 'encoder'] = file;
+    groups.set(key, group);
+  }
+  const whole = [...groups].filter(([, g]) => g.encoder && g.decoder && g.joiner);
+  whole.sort(([a], [b]) => Number(b.endsWith(' int8')) - Number(a.endsWith(' int8'))
+    || Number(/epoch-(\d+)/.exec(b)?.[1] ?? 0) - Number(/epoch-(\d+)/.exec(a)?.[1] ?? 0) || a.localeCompare(b));
+  return whole.length ? (whole[0]![1] as Record<'encoder' | 'decoder' | 'joiner', string>) : null;
+}
+
 /** A model shipped as one archive, its files found by name inside it (`KWS_MODEL`). */
 export interface KwsModelSpec {
   id: string;
   /** The archive's file name in the release. */
   archive: string;
-  /** `role` is what the spotter loads the file as (`src/voice/kws.ts`); `name` takes the files inside. */
-  files: ReadonlyArray<{ role: string; name: RegExp }>;
+  /** The tokens table the keywords are written in; the three model files are found by `pickExport`. */
+  tokens: RegExp;
   sources: ReadonlyArray<(file: string) => string>;
 }
 
@@ -156,16 +193,29 @@ function run(cmd: string, args: string[], cwd: string, t: PetText['store']): Pro
   });
 }
 
+/** The tar inside a `.tar.bz2`, expanded to the file beside it; the archive itself when it needs no bzip2. */
+async function bunzip(archive: string): Promise<string> {
+  if (!archive.endsWith('.bz2')) return archive;
+  const tar = archive.slice(0, -4);
+  await pipeline(createReadStream(archive), unbzip2(), createWriteStream(tar));
+  return tar;
+}
+
 export async function extract(archive: string, into: string, t: PetText['store'] = petText().store): Promise<void> {
   mkdirSync(into, { recursive: true });
-  if (process.platform === 'win32') {
-    // bsdtar ships with Windows 10+; GNU tar earlier on PATH (Git's) cannot read zip
-    const tar = resolve(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
-    await run(tar, ['-xf', archive, '-C', into], into, t);
-  } else if (archive.endsWith('.zip') && process.platform === 'linux') {
-    await run('unzip', ['-q', '-o', archive, '-d', into], into, t);
-  } else {
-    await run('tar', ['-xf', archive, '-C', into], into, t);
+  const file = await bunzip(archive);
+  try {
+    if (process.platform === 'win32') {
+      // bsdtar ships with Windows 10+; GNU tar earlier on PATH (Git's) cannot read zip
+      const tar = resolve(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
+      await run(tar, ['-xf', file, '-C', into], into, t);
+    } else if (file.endsWith('.zip') && process.platform === 'linux') {
+      await run('unzip', ['-q', '-o', file, '-d', into], into, t);
+    } else {
+      await run('tar', ['-xf', file, '-C', into], into, t);
+    }
+  } finally {
+    if (file !== archive) rmSync(file, { force: true });
   }
 }
 
@@ -330,24 +380,23 @@ class KwsSlot {
     return join(this.root(), this.spec.id);
   }
 
-  private find(f: { name: RegExp }): string | null {
-    return findByMatch(this.dir, f.name);
+  private findTokens(): string | null {
+    return findByMatch(this.dir, this.spec.tokens);
   }
 
   /** Where each file lives, by role; a role whose file is missing is left out. */
   paths(): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const f of this.spec.files) {
-      const hit = this.find(f);
-      if (hit) out[f.role] = hit;
-    }
+    const out: Record<string, string> = { ...(pickExport(this.dir) ?? {}) };
+    const tokens = this.findTokens();
+    if (tokens) out.tokens = tokens;
     return out;
   }
 
   private whole(): boolean {
-    return this.spec.files.every((f) => {
-      const hit = this.find(f);
-      return hit !== null && statSync(hit).size > 0;
+    const paths = this.paths();
+    return KWS_ROLES.every((role) => {
+      const hit = paths[role];
+      return hit !== undefined && statSync(hit).size > 0;
     });
   }
 
@@ -384,9 +433,9 @@ class KwsSlot {
       rmSync(this.dir, { recursive: true, force: true });
       // the files are looked for inside `partial` before it is moved: a moved directory is easier to
       // get wrong than to check, and half of a model would then read as a whole one
-      if (!this.spec.files.every((f) => { const hit = findByMatch(partial, f.name); return hit !== null && statSync(hit).size > 0; })) {
+      if (!pickExport(partial) || !findByMatch(partial, this.spec.tokens)) {
         rmSync(partial, { recursive: true, force: true });
-        throw new Error(this.text().failed(this.spec.archive, this.spec.files.map((f) => String(f.name)).join(' ')));
+        throw new Error(this.text().failed(this.spec.archive, KWS_ROLES.join(' ')));
       }
       renameSync(partial, this.dir);
       this.job.state = { phase: 'ready', path: this.dir, done: this.job.state.done, total: this.job.state.total, detail: null };

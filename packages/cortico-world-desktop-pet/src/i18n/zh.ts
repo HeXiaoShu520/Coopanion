@@ -130,7 +130,7 @@ export default {
     },
     keywords: {
       title: '唤醒的词',
-      description: '一行一个，照 sherpa-onnx 关键词文件的写法：模型的 token 用空格分开，接 :分数 #阈值，@ 之后是给人看的词。例如“▁小 ▁可 :2.0 #0.4 @小可”。模型是中文 zipformer，token 要按它的词表写',
+      description: '一行一个，按模型的拼音写法：声母和韵母用空格隔开，@ 之后是给人看的词。例如“x iǎo k ě @小可”叫醒的是小可',
     },
     threshold: {
       title: '灵敏度',

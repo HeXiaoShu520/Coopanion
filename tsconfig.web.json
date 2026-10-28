@@ -9,5 +9,5 @@
   },
   "files": [],
   "exclude": [],
-  "include": ["console/**/*.ts", "console/**/*.tsx", "core/webui/**/*.ts"]
+  "include": ["console/**/*.ts", "console/**/*.tsx", "core/webui/**/*.ts", "packages/cortico-world-desktop-pet/src/**/*.d.ts"]
 }

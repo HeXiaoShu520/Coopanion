@@ -112,13 +112,12 @@ describe('the FunASR model', () => {
 });
 
 describe('the wake word model', () => {
-  const files = {
-    'encoder-epoch-12-avg-2-chunk-16-left-64.onnx': Buffer.from('encoder'),
-    'encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx': Buffer.from('encoder int8'),
-    'decoder-epoch-12-avg-2-chunk-16-left-64.onnx': Buffer.from('decoder'),
-    'joiner-epoch-12-avg-2-chunk-16-left-64.onnx': Buffer.from('joiner'),
-    'tokens.txt': Buffer.from('a b c'),
-  };
+  /** One export of a model: the three files the spotter loads, named after the export they belong to. */
+  const exportFiles = (middle: string, cut: '.int8.onnx' | '.onnx'): Record<string, Buffer> => Object.fromEntries(
+    ['encoder', 'decoder', 'joiner'].map((role) => [`${role}-${middle}${cut}`, Buffer.from(`${role}-${middle}-${cut}`)]),
+  );
+
+  const files = { ...exportFiles('epoch-12-avg-2-chunk-16-left-64', '.int8.onnx'), 'tokens.txt': Buffer.from('a b c') };
 
   /** A tar like the release's, its files in a directory named after the model. */
   function archiveOf(modelFiles: Record<string, Buffer>): Buffer {
@@ -135,27 +134,66 @@ describe('the wake word model', () => {
   const spec = (url: string) => ({
     id: 'kws-test',
     archive: 'kws.tar',
-    files: [
-      { role: 'encoder', name: /^encoder[^/]*\.onnx$/ },
-      { role: 'decoder', name: /^decoder[^/]*\.onnx$/ },
-      { role: 'joiner', name: /^joiner[^/]*\.onnx$/ },
-      { role: 'tokens', name: /^tokens\.txt$/ },
-    ],
+    tokens: /^tokens\.txt$/,
     sources: [(file: string) => `${url}/${file}`],
   });
 
-  it('unpacks one archive and finds the files by name, the int8 export first', async () => {
-    const a = await fileServer({ 'kws.tar': archiveOf(files) });
+  it('takes the three files of one export: int8 first, then the newest epoch', async () => {
+    const both = {
+      ...exportFiles('epoch-12-avg-2-chunk-16-left-64', '.onnx'),
+      ...exportFiles('epoch-99-avg-1-chunk-16-left-64', '.onnx'),
+      ...exportFiles('epoch-99-avg-1-chunk-16-left-64', '.int8.onnx'),
+      'tokens.txt': Buffer.from('a b c'),
+    };
+    const a = await fileServer({ 'kws.tar': archiveOf(both) });
     try {
       const root = mkdtempSync(join(tmpdir(), 'pet-kwsm-'));
       const store = new RuntimeStore({ runtimesRoot: () => root, modelsDir: () => root, kwsModel: spec(a.url) });
-      expect(store.kws.state().phase).toBe('absent');
       await store.kws.install();
       expect(store.kws.state().phase).toBe('ready');
       const paths = store.kws.paths();
       expect(Object.keys(paths).sort()).toEqual(['decoder', 'encoder', 'joiner', 'tokens']);
-      expect(paths.encoder!.endsWith('.int8.onnx')).toBe(true);
+      for (const role of ['encoder', 'decoder', 'joiner'] as const) {
+        expect(paths[role]).toContain('epoch-99-avg-1-chunk-16-left-64.int8.onnx');
+      }
       expect(existsSync(`${store.kws.dir}.partial`)).toBe(false);
+    } finally {
+      a.server.close();
+    }
+  });
+
+  it('never pairs an encoder with a decoder from another export', async () => {
+    // the int8 cut of epoch 99 has an encoder only, so nothing may pair it with the float decoder of epoch 12
+    const mixed = {
+      'encoder-epoch-99-avg-1-chunk-16-left-64.int8.onnx': Buffer.from('encoder int8'),
+      ...exportFiles('epoch-99-avg-1-chunk-16-left-64', '.onnx'),
+      ...exportFiles('epoch-12-avg-2-chunk-16-left-64', '.int8.onnx'),
+      'tokens.txt': Buffer.from('a b c'),
+    };
+    const a = await fileServer({ 'kws.tar': archiveOf(mixed) });
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'pet-kwsm-'));
+      const store = new RuntimeStore({ runtimesRoot: () => root, modelsDir: () => root, kwsModel: spec(a.url) });
+      await store.kws.install();
+      const paths = store.kws.paths();
+      const middles = new Set(['encoder', 'decoder', 'joiner'].map((role) => /epoch-[^.]*/.exec(paths[role]!)![0].replace(/\.int8$/, '')));
+      expect(middles.size).toBe(1);
+      expect([...middles][0]).toBe('epoch-12-avg-2-chunk-16-left-64');
+    } finally {
+      a.server.close();
+    }
+  });
+
+  it('expands a .tar.bz2 with its own decoder rather than asking for bzip2', async () => {
+    const bz2 = readFileSync(new URL('./fixtures/kws.tar.bz2', import.meta.url));
+    const a = await fileServer({ 'kws.tar.bz2': bz2 });
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'pet-kwsm-'));
+      const store = new RuntimeStore({ runtimesRoot: () => root, modelsDir: () => root, kwsModel: { ...spec(a.url), archive: 'kws.tar.bz2' } });
+      await store.kws.install();
+      expect(store.kws.state().phase).toBe('ready');
+      expect(Object.keys(store.kws.paths()).sort()).toEqual(['decoder', 'encoder', 'joiner', 'tokens']);
+      expect(existsSync(join(root, 'kws-test', 'kws.tar'))).toBe(false);
     } finally {
       a.server.close();
     }

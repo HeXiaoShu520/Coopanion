@@ -132,7 +132,7 @@ const en: PetText = {
     },
     keywords: {
       title: 'Words that wake it',
-      description: 'One a line, in sherpa-onnx\'s keywords-file syntax: the model\'s tokens joined by spaces, then :score #threshold, then the words you read after @ — "▁小 ▁可 :2.0 #0.4 @小可". The model is a Chinese zipformer, so the tokens follow its vocabulary',
+      description: 'One a line, in the model\'s pinyin: initials and finals spaced apart, and after @ the words you read. "x iǎo k ě @小可" wakes on 小可',
     },
     threshold: {
       title: 'Sensitivity',

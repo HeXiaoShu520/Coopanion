@@ -113,7 +113,7 @@ const it: Translation<PetText> = {
     },
     keywords: {
       title: 'Parole che la attivano',
-      description: 'Una per riga, con la sintassi del file di parole chiave di sherpa-onnx: i token del modello separati da spazi, poi :punteggio #soglia, e dopo @ le parole che leggi, per esempio «▁小 ▁可 :2.0 #0.4 @小可». Il modello è uno zipformer cinese, i token seguono il suo vocabolario',
+      description: 'Una per riga, in pinyin come lo scrive il modello: iniziali e finali separate da spazi, e dopo @ le parole che leggi. «x iǎo k ě @小可» attiva su 小可',
     },
     threshold: {
       title: 'Sensibilità',
