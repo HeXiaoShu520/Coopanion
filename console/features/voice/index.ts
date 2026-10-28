@@ -1,7 +1,7 @@
 /**
- * 「语音输入」: the desktop-pet World's own `voice` panel (switch, talk key, microphone, level
- * meter, what it heard), mounted on its own without the World page around it, so the normal mode
- * reaches it without the World tree.
+ * 「语音」: the desktop-pet World's own `voice` panel (switch, talk key, microphone, level
+ * meter, what it heard, reading replies aloud, the wake word), mounted on its own without the
+ * World page around it, so the normal mode reaches it without the World tree.
  */
 import type { Page, PageContext } from '../../base/page.ts';
 import { intro } from '../intro.ts';

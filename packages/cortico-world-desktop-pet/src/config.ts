@@ -6,6 +6,7 @@ import type { SegmentConfig } from './asr/segmenter.ts';
 import { DEFAULT_HOTKEY, DEFAULT_TYPE_KEY } from './asr/hotkey.ts';
 import { capFor, petText } from './i18n/index.ts';
 import { CUA_DEFAULTS, cuaConfigGroup, type CuaConfig } from './cua/config.ts';
+import { MAX_CHARS as MAX_READ_CHARS } from './voice/clean.ts';
 
 export const DESKTOP_PET_ID = 'desktop-pet';
 
@@ -133,12 +134,13 @@ export type MicMode = 'hold' | 'toggle' | 'always';
 /**
  * funasr: FunASR's SenseVoiceSmall; whisper: OpenAI's Whisper small (both in this process, one model
  * download each, every platform); system: the recognizer Windows ships (nothing to download, less accurate);
- * api: an OpenAI-compatible transcription service at `asr.api` (src/asr/transcription-api.ts).
+ * api: an OpenAI-compatible transcription service at `asr.api` (src/asr/transcription-api.ts);
+ * doubao: Volcengine's streaming service at `asr.doubao` (src/voice/doubao-asr.ts), the words as they are spoken.
  */
-export type AsrEngine = 'funasr' | 'whisper' | 'system' | 'api';
+export type AsrEngine = 'funasr' | 'whisper' | 'system' | 'api' | 'doubao';
 
 /** The deployment secrets this World reads, by what they are for. */
-export const DESKTOP_PET_SECRETS = { asrApiKey: 'DESKTOP_PET_ASR_API_KEY' } as const;
+export const DESKTOP_PET_SECRETS = { asrApiKey: 'DESKTOP_PET_ASR_API_KEY', doubaoApiKey: 'DESKTOP_PET_DOUBAO_API_KEY' } as const;
 
 /** Languages SenseVoiceSmall hears, by the app language that speaks them; it also takes `yue` and `auto`. */
 export const SENSEVOICE_LANGUAGES: Readonly<Record<string, string>> = { zh: 'zh', 'zh-Hant': 'zh', en: 'en', ja: 'ja', ko: 'ko' };
@@ -150,7 +152,7 @@ export const SENSEVOICE_LANGUAGES: Readonly<Record<string, string>> = { zh: 'zh'
  */
 export function asrEngineFor(setting: string, language: string, systemSupported: boolean): AsrEngine {
   const byLanguage: AsrEngine = language in SENSEVOICE_LANGUAGES ? 'funasr' : 'whisper';
-  if (setting === 'funasr' || setting === 'whisper' || setting === 'api') return setting;
+  if (setting === 'funasr' || setting === 'whisper' || setting === 'api' || setting === 'doubao') return setting;
   return setting === 'system' && systemSupported ? 'system' : byLanguage;
 }
 
@@ -188,6 +190,38 @@ export interface DesktopPetConfigSection extends WorldSection {
   sound: boolean;
   sounds: SoundSettings;
   speech: SpeechSettings;
+  /**
+   * Reading the bot's replies aloud through Doubao (src/voice/doubao-tts.ts). Off, or a reply the
+   * person typed, and the pet keeps only its syllables (`speech`); a reply it was asked for by voice
+   * is read (src/voice/turn.ts).
+   */
+  tts: {
+    enabled: boolean;
+    /** The service's speaker id. */
+    voice: string;
+    /** How fast the sound plays, 1 = as made (`tts.speed` of the page's player). */
+    speed: number;
+    /** How loud, 1 = as made, 0 silent; the panel has no separate mute, the sound switch covers both. */
+    volume: number;
+    /** How much of a reply is read at all, in characters (src/voice/clean.ts). */
+    maxChars: number;
+    /** Take out Markdown, code, links, emoji and long asides before reading (src/voice/clean.ts). */
+    clean: boolean;
+  };
+  /**
+   * The wake word: a local keyword spotter (src/voice/kws.ts) hears the microphone frames the page
+   * already sends, and a word it matches starts listening as the talk key does. Off, and nothing is
+   * heard but the recognizer's own sentences.
+   */
+  wake: {
+    enabled: boolean;
+    /** The spotter's keywords file, one keyword a line in its own syntax (`tokens :score #threshold @shown`). */
+    keywords: string;
+    /** How sure the spotter must be, 0–1: lower hears more false wakes, higher misses more. */
+    threshold: number;
+    /** Milliseconds after one wake during which the next is ignored. */
+    cooldownMs: number;
+  };
   theme: PetTheme;
   /** Start each run where the pet stood when the World last stopped. */
   rememberPosition: boolean;
@@ -237,6 +271,8 @@ export interface DesktopPetConfigSection extends WorldSection {
     timeoutMs: number;
     /** Engine `api`: requests go to `baseUrl` + `/audio/transcriptions`; the API Key is the secret `DESKTOP_PET_SECRETS.asrApiKey`. */
     api: { baseUrl: string; model: string };
+    /** Engine `doubao`: sessions go to `baseUrl`; empty uses the official address. The API Key is the secret `DESKTOP_PET_SECRETS.doubaoApiKey`, shared with synthesis. */
+    doubao: { baseUrl: string };
     segment: SegmentConfig;
     mic: {
       mode: MicMode;
@@ -260,6 +296,16 @@ export const BUBBLE_SPEED_MIN = .5, BUBBLE_SPEED_MAX = 2;
 export const GLOW_MAX = 16, GLOW_DEFAULT = 7;
 /** The range of `asr.segment.thresholdDb`, in dBFS. */
 export const THRESHOLD_DB_MIN = -80, THRESHOLD_DB_MAX = 0;
+/** The voice replies are read in until another is chosen: the service's own 通用女声. */
+export const DEFAULT_TTS_VOICE = 'zh_female_vv_uranus_bigtts';
+/** The range of `tts.speed` and `tts.volume`, and of `tts.maxChars`. */
+export const TTS_SPEED_MIN = .5, TTS_SPEED_MAX = 2;
+export const TTS_MAX_CHARS_MIN = 40, TTS_MAX_CHARS_MAX = 600;
+/** What the wake word asks of the spotter until the person changes it: sherpa-onnx's own value. */
+export const WAKE_DEFAULT_THRESHOLD = .25;
+/** The range of `wake.threshold`, and of `wake.cooldownMs`. */
+export const WAKE_THRESHOLD_MIN = .05, WAKE_THRESHOLD_MAX = .9;
+export const WAKE_COOLDOWN_MAX = 10_000;
 
 export const DESKTOP_PET_DEFAULTS: DesktopPetConfigSection = {
   enabled: false,
@@ -270,6 +316,8 @@ export const DESKTOP_PET_DEFAULTS: DesktopPetConfigSection = {
   sound: true,
   sounds: { move: true, touch: true, face: true, snore: true, talk: true, ui: true, snoreSeconds: 0 },
   speech: { enabled: false, pitch: 'mid', pitchHz: SPEECH_PITCH_HZ.mid, speed: 'mid', unitsPerSecond: SPEECH_RATE.mid },
+  tts: { enabled: false, voice: DEFAULT_TTS_VOICE, speed: 1, volume: 1, maxChars: MAX_READ_CHARS, clean: true },
+  wake: { enabled: false, keywords: '', threshold: WAKE_DEFAULT_THRESHOLD, cooldownMs: 1500 },
   theme: 'dark',
   rememberPosition: false,
   petX: null,
@@ -295,6 +343,7 @@ export const DESKTOP_PET_DEFAULTS: DesktopPetConfigSection = {
     simplified: true,
     timeoutMs: 20_000,
     api: { baseUrl: '', model: '' },
+    doubao: { baseUrl: '' },
     segment: { thresholdDb: -42, minSpeechMs: 180, dispatchSilenceMs: 250, silenceMs: 600, maxUtteranceMs: 15_000, preRollMs: 320, minUtteranceMs: 350 },
     mic: { mode: 'hold', hotkey: DEFAULT_HOTKEY, deviceId: '', openOnPress: false },
   },
@@ -362,6 +411,22 @@ export function desktopPetConfigGroups(language: Language = 'zh'): ConfigGroup[]
       },
     },
   };
+  const read: ConfigGroup = {
+    id: `world:${DESKTOP_PET_ID}:tts`,
+    owner: `world:${DESKTOP_PET_ID}`,
+    schema: {
+      type: 'object',
+      title: c.ttsGroup,
+      properties: {
+        [`${K}.tts.enabled`]: { type: 'boolean', title: c.ttsEnabled.title, description: c.ttsEnabled.description, 'x-hot': true },
+        [`${K}.tts.voice`]: { type: 'string', title: c.ttsVoice.title, description: c.ttsVoice.description, 'x-hot': true },
+        [`${K}.tts.speed`]: { type: 'number', title: c.ttsSpeed.title, minimum: TTS_SPEED_MIN, maximum: TTS_SPEED_MAX, multipleOf: .05, 'x-hot': true },
+        [`${K}.tts.volume`]: { type: 'number', title: c.ttsVolume.title, minimum: 0, maximum: 1, multipleOf: .05, 'x-hot': true },
+        [`${K}.tts.maxChars`]: { type: 'integer', title: c.ttsMaxChars.title, description: c.ttsMaxChars.description, minimum: TTS_MAX_CHARS_MIN, maximum: TTS_MAX_CHARS_MAX, 'x-hot': true },
+        [`${K}.tts.clean`]: { type: 'boolean', title: c.ttsClean.title, description: c.ttsClean.description, 'x-hot': true },
+      },
+    },
+  };
   const asr: ConfigGroup = {
     id: `world:${DESKTOP_PET_ID}:asr`,
     owner: `world:${DESKTOP_PET_ID}`,
@@ -370,9 +435,10 @@ export function desktopPetConfigGroups(language: Language = 'zh'): ConfigGroup[]
       title: c.asrGroup,
       properties: {
         [`${K}.asr.enabled`]: { type: 'boolean', title: c.asrEnabled.title, 'x-hot': true },
-        [`${K}.asr.engine`]: { type: 'string', title: c.asrEngine.title, enum: ['', 'funasr', 'whisper', 'system', 'api'], description: c.asrEngine.description, 'x-hot': true },
+        [`${K}.asr.engine`]: { type: 'string', title: c.asrEngine.title, enum: ['', 'funasr', 'whisper', 'system', 'api', 'doubao'], description: c.asrEngine.description, 'x-hot': true },
         [`${K}.asr.api.baseUrl`]: { type: 'string', title: c.asrApiUrl.title, description: c.asrApiUrl.description, 'x-hot': true },
         [`${K}.asr.api.model`]: { type: 'string', title: c.asrApiModel.title, description: c.asrApiModel.description, 'x-hot': true },
+        [`${K}.asr.doubao.baseUrl`]: { type: 'string', title: c.asrDoubaoUrl.title, description: c.asrDoubaoUrl.description, 'x-hot': true },
         [`${K}.asr.language`]: { type: 'string', title: c.asrLanguage.title, description: c.asrLanguage.description, 'x-hot': true },
         [`${K}.asr.threads`]: { type: 'integer', title: c.asrThreads.title, minimum: 0, maximum: 16, description: c.asrThreads.description, 'x-hot': true },
         [`${K}.asr.simplified`]: { type: 'boolean', title: c.asrSimplified.title, description: c.asrSimplified.description, 'x-hot': true },
@@ -382,5 +448,24 @@ export function desktopPetConfigGroups(language: Language = 'zh'): ConfigGroup[]
       },
     },
   };
-  return [pet, sound, asr, cuaConfigGroup(language)];
+  return [pet, sound, read, asr, wakeConfigGroup(language), cuaConfigGroup(language)];
+}
+
+/** The wake word's own group: what may wake the pet, and how ready the spotter must be. */
+function wakeConfigGroup(language: Language): ConfigGroup {
+  const w = petText(language).wake;
+  return {
+    id: `world:${DESKTOP_PET_ID}:wake`,
+    owner: `world:${DESKTOP_PET_ID}`,
+    schema: {
+      type: 'object',
+      title: w.group,
+      properties: {
+        [`${K}.wake.enabled`]: { type: 'boolean', title: w.enabled.title, description: w.enabled.description, 'x-hot': true },
+        [`${K}.wake.keywords`]: { type: 'string', title: w.keywords.title, description: w.keywords.description, 'x-hot': true },
+        [`${K}.wake.threshold`]: { type: 'number', title: w.threshold.title, description: w.threshold.description, minimum: WAKE_THRESHOLD_MIN, maximum: WAKE_THRESHOLD_MAX, multipleOf: .05, 'x-hot': true },
+        [`${K}.wake.cooldownMs`]: { type: 'integer', title: w.cooldownMs.title, minimum: 0, maximum: WAKE_COOLDOWN_MAX, 'x-suffix': 'ms', 'x-hot': true },
+      },
+    },
+  };
 }

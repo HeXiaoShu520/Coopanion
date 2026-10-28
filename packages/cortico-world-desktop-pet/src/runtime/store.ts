@@ -70,6 +70,25 @@ export const WHISPER_MODEL: ModelSpec = {
   ],
 };
 
+/**
+ * The wake word model: sherpa-onnx's zipformer keyword spotter over WenetSpeech, int8, about 3 MB
+ * in all (Apache-2.0, export by k2-fsa). It comes as one archive rather than as four named files:
+ * the export's names carry its epoch and chunk size, so what a file is gets read off the name's
+ * start (`encoder…onnx`). Upstream publishes neither a size nor a digest for the archive that could
+ * be pinned here, so what is checked is that every file arrived and is not empty.
+ */
+export const KWS_MODEL: KwsModelSpec = {
+  id: 'kws-zipformer-wenetspeech-3.3M-2024-01-01',
+  archive: 'sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2',
+  files: [
+    { role: 'encoder', name: /^encoder[^/]*\.onnx$/ },
+    { role: 'decoder', name: /^decoder[^/]*\.onnx$/ },
+    { role: 'joiner', name: /^joiner[^/]*\.onnx$/ },
+    { role: 'tokens', name: /^tokens\.txt$/ },
+  ],
+  sources: [(file: string) => `https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/${file}`],
+};
+
 export const ELECTRON_RUNTIME = {
   id: 'electron',
   version: '44.4.4',
@@ -96,6 +115,35 @@ function findFile(dir: string, name: string, depth = 5): string | null {
     if (hit) return hit;
   }
   return null;
+}
+
+/**
+ * Depth-first search for a file whose name `match` takes; the int8 export first, then the shortest
+ * name, so an archived model with several exports resolves to one of them the same way every time.
+ */
+function findByMatch(dir: string, match: RegExp, depth = 5): string | null {
+  if (!existsSync(dir) || depth < 0) return null;
+  const here = readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && match.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((a, b) => Number(b.includes('.int8.')) - Number(a.includes('.int8.')) || a.length - b.length);
+  if (here.length) return join(dir, here[0]!);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.endsWith('.partial')) continue;
+    const hit = findByMatch(join(dir, entry.name), match, depth - 1);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** A model shipped as one archive, its files found by name inside it (`KWS_MODEL`). */
+export interface KwsModelSpec {
+  id: string;
+  /** The archive's file name in the release. */
+  archive: string;
+  /** `role` is what the spotter loads the file as (`src/voice/kws.ts`); `name` takes the files inside. */
+  files: ReadonlyArray<{ role: string; name: RegExp }>;
+  sources: ReadonlyArray<(file: string) => string>;
 }
 
 function run(cmd: string, args: string[], cwd: string, t: PetText['store']): Promise<void> {
@@ -267,6 +315,90 @@ class ModelSlot {
   }
 }
 
+/**
+ * A model that comes as one archive: present when a file for every role is found inside and none
+ * of them is empty. The archive is unpacked into the model's own directory, so a second download
+ * starts from nothing rather than from half of two releases.
+ */
+class KwsSlot {
+  private job: Job;
+  constructor(private readonly root: () => string, private readonly spec: KwsModelSpec, private readonly text: StoreText, private readonly fetchImpl?: typeof fetch) {
+    this.job = { state: { phase: 'absent', path: '', done: 0, total: null, detail: null }, promise: null };
+  }
+
+  get dir(): string {
+    return join(this.root(), this.spec.id);
+  }
+
+  private find(f: { name: RegExp }): string | null {
+    return findByMatch(this.dir, f.name);
+  }
+
+  /** Where each file lives, by role; a role whose file is missing is left out. */
+  paths(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const f of this.spec.files) {
+      const hit = this.find(f);
+      if (hit) out[f.role] = hit;
+    }
+    return out;
+  }
+
+  private whole(): boolean {
+    return this.spec.files.every((f) => {
+      const hit = this.find(f);
+      return hit !== null && statSync(hit).size > 0;
+    });
+  }
+
+  state(): ArtifactState {
+    if (this.job.promise) return { ...this.job.state };
+    if (this.whole()) return { phase: 'ready', path: this.dir, done: 0, total: null, detail: null };
+    return { ...this.job.state, phase: this.job.state.phase === 'error' ? 'error' : 'absent', path: this.dir };
+  }
+
+  install(): Promise<void> {
+    if (this.job.promise) return this.job.promise;
+    this.job.state = { phase: 'working', path: this.dir, done: 0, total: null, detail: this.text().downloadingWake };
+    const partial = `${this.dir}.partial`;
+    const work = (async () => {
+      rmSync(partial, { recursive: true, force: true });
+      mkdirSync(partial, { recursive: true });
+      const archive = join(partial, this.spec.archive);
+      const errors: string[] = [];
+      for (const source of this.spec.sources) {
+        const url = source(this.spec.archive);
+        try {
+          this.job.state.detail = this.text().downloadingFrom(this.spec.archive, new URL(url).host);
+          await downloadFile(url, archive, { fetchImpl: this.fetchImpl, onProgress: (done, total) => { this.job.state.done = done; this.job.state.total = total; } });
+          break;
+        } catch (err) {
+          rmSync(archive, { force: true });
+          errors.push(`${new URL(url).host}: ${(err as Error).message}`);
+        }
+      }
+      if (!existsSync(archive)) throw new Error(this.text().failed(this.spec.archive, errors.join('; ')));
+      this.job.state.detail = this.text().unpacking;
+      await extract(archive, partial, this.text());
+      rmSync(archive, { force: true });
+      rmSync(this.dir, { recursive: true, force: true });
+      // the files are looked for inside `partial` before it is moved: a moved directory is easier to
+      // get wrong than to check, and half of a model would then read as a whole one
+      if (!this.spec.files.every((f) => { const hit = findByMatch(partial, f.name); return hit !== null && statSync(hit).size > 0; })) {
+        rmSync(partial, { recursive: true, force: true });
+        throw new Error(this.text().failed(this.spec.archive, this.spec.files.map((f) => String(f.name)).join(' ')));
+      }
+      renameSync(partial, this.dir);
+      this.job.state = { phase: 'ready', path: this.dir, done: this.job.state.done, total: this.job.state.total, detail: null };
+    })().catch((err: Error) => {
+      rmSync(partial, { recursive: true, force: true });
+      this.job.state = { phase: 'error', path: this.dir, done: 0, total: null, detail: err.message };
+    }).finally(() => { this.job.promise = null; });
+    this.job.promise = work;
+    return work;
+  }
+}
+
 export interface RuntimeStoreOptions {
   runtimesRoot: () => string;
   modelsDir: () => string;
@@ -274,6 +406,8 @@ export interface RuntimeStoreOptions {
   /** The speech models; tests pass small ones. */
   funasrModel?: ModelSpec;
   whisperModel?: ModelSpec;
+  /** The wake word model; tests pass a small archive. */
+  kwsModel?: KwsModelSpec;
   /** The text table of the app language, read at each step; Chinese when absent. */
   text?: () => PetText;
 }
@@ -282,11 +416,14 @@ export class RuntimeStore {
   readonly electron: RuntimeSlot;
   readonly funasr: ModelSlot;
   readonly whisper: ModelSlot;
+  /** The wake word model (`src/voice/kws.ts`), downloaded as one archive. */
+  readonly kws: KwsSlot;
 
   constructor(opts: RuntimeStoreOptions) {
     const text = () => (opts.text?.() ?? petText()).store;
     this.electron = new RuntimeSlot(opts.runtimesRoot, ELECTRON_RUNTIME, text, opts.fetchImpl);
     this.funasr = new ModelSlot(opts.modelsDir, opts.funasrModel ?? FUNASR_MODEL, text, opts.fetchImpl);
     this.whisper = new ModelSlot(opts.modelsDir, opts.whisperModel ?? WHISPER_MODEL, text, opts.fetchImpl);
+    this.kws = new KwsSlot(opts.modelsDir, opts.kwsModel ?? KWS_MODEL, text, opts.fetchImpl);
   }
 }

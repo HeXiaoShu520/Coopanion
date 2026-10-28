@@ -14,6 +14,7 @@ import { applyTheme, clamp, f, ICONS, linked } from './ui.js';
 import { language, t, useLanguage } from './i18n.js';
 import { createSfx } from './sound.js';
 import { createSpeech, textSteps } from './speech.js';
+import { createVoiceOut } from './voice-out.js';
 import { COO_CSS, PALETTES, mini, normalizeSkin, skinCss } from './coo/coo.js';
 import { loadBody } from './body-host.js';
 import { accentColors, announcePainted, bubbleCss, dressFloor, glowColor, lightWall, modeButton, setGlow } from './stage.js';
@@ -72,6 +73,14 @@ const lightFor = (s) => {
 const sfx = createSfx();
 // Coo's speech stands in for the babble while it is on; its units move the mouth
 const speech = createSpeech(sfx, { onUnit: () => body?.talk() });
+/**
+ * The replies the World reads aloud, pulled piece by piece; the syllables stay quiet while one plays.
+ * A finished reply is reported back, so the World stops treating that turn as still reading.
+ */
+const voiceOut = createVoiceOut({
+  onDone: (id) => send({ t: 'spoke', id }),
+  onFail: (id) => send({ t: 'spoke', id }),
+});
 if (host) sfx.unlock();
 else ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, () => sfx.unlock(), { capture: true }));
 
@@ -111,6 +120,8 @@ function connect() {
   ws.onclose = (e) => {
     ws = null;
     stopMic();
+    // nothing can be pulled from a World that is gone
+    voiceOut.stop();
     // the World gave up on these steps when the page went; it asks again once the page is back
     dropDialogs();
     setStatus(null);
@@ -258,9 +269,16 @@ function applyPrefs(p) {
   // while a card is tried on, the config's skin waits until the step ends
   if (p.skin) { if (worn) worn = normalizeSkin(p.skin); else putOn(normalizeSkin(p.skin)); }
   if (p.roam) { prefs.roam = p.roam; body?.set({ roam: p.roam }); }
-  if (typeof p.sound === 'boolean') { prefs.sound = p.sound; sfx.set(p.sound); }
+  if (typeof p.sound === 'boolean') {
+    prefs.sound = p.sound;
+    sfx.set(p.sound);
+    // reading aloud follows the same switch: off, the reply being read stops
+    if (!p.sound) voiceOut.stop();
+  }
   if (p.sounds && typeof p.sounds === 'object') sfx.configure({ kinds: p.sounds, snoreSeconds: p.sounds.snoreSeconds });
   if (p.speech && typeof p.speech === 'object') speech.configure(p.speech);
+  // reading aloud: the World's pace and volume, applied to a reply already playing too
+  if (p.tts && typeof p.tts === 'object') voiceOut.configure({ speed: p.tts.speed, volume: p.tts.volume });
   if (p.theme === 'dark' || p.theme === 'light') { prefs.theme = p.theme; applyTheme(p.theme); modeBtn?.show(p.theme); body?.set({ theme: p.theme }); }
   if (typeof p.glow === 'number') prefs.glow = p.glow;
   if (typeof p.scale === 'number') { prefs.scale = p.scale; body?.set({ bounds: bounds() }); }
@@ -305,11 +323,14 @@ function onOrder(m) {
   switch (m.t) {
     case 'init': restorePosition(m.startX, m.startY); applyPrefs(m); if (!host) announcePainted(); break;
     case 'prefs': applyPrefs(m); break;
-    case 'watching': watching = true; stopMic(); break;
+    case 'watching': watching = true; stopMic(); voiceOut.stop(); break;
     // the settings window's 「在桌面上隐藏」: the same as the menu's 「隐藏」
     case 'hide': host?.hide?.(); break;
     case 'type': openTyping(); break;
     case 'say': dropAsks(); queue.push({ kind: 'say', id: m.id, beats: m.beats, i: -1 }); holdRoam(20); break;
+    // the same bubble's words, read aloud: pulled piece by piece from the World while they type
+    case 'speak': voiceOut.speak(m.id, m.pieces); break;
+    case 'speak-stop': voiceOut.stop(); break;
     case 'ask': dropAsks(); queue.push({ kind: 'ask', id: m.id, question: m.question, options: m.options || [], own: m.own !== false }); holdRoam(20); break;
     case 'confirm': dropAsks(); queue.push({ kind: 'ask', confirm: true, id: m.id, question: m.question, options: m.options, own: false }); holdRoam(20); break;
     case 'walk': walk(m); break;
@@ -404,11 +425,14 @@ function closeBubble() {
   releaseKeys(item);
   // a step taken off the bubble unanswered puts back the skin a card tried on
   if (item?.kind === 'dialog') { talk.motion = null; takeOff(false); }
+  // the words go with the bubble: a line taken off the screen is not read on
+  if (item && voiceOut.reading === item.id) send({ t: 'spoke-stop' });
   bubble.hidden = true; bubble.innerHTML = '';
   // the lines it answered fade a moment after (stepLines)
   if (item) item.endedAt = T;
   item = null;
   speech.stop();
+  voiceOut.stop();
 }
 
 /**
@@ -462,6 +486,8 @@ function stepDialog(dt) {
     if (it.i < 0 || it.beatDone) {
       if (it.beatDone && pointedAt()) it.holdUntil += dt;
       if (it.beatDone && T < it.holdUntil) return;
+      // the voice reading this bubble holds it up: the next words wait until these have been heard
+      if (it.beatDone && voiceOut.reading === it.id) return;
       it.i++;
       it.beatDone = false;
       if (it.i >= it.beats.length) { closeBubble(); return; }
@@ -493,10 +519,10 @@ function stepDialog(dt) {
 function typeText(it, text, dt, anchors) {
   const p = bubble.querySelector('.b-text');
   if (!p || it.shown >= text.length) return;
-  if (it.spoken !== text) { it.spoken = text; speech.begin(text); }
+  if (it.spoken !== text) { it.spoken = text; if (!voiceOut.active) speech.begin(text); }
   // with speech, each pause mark waits its own time, letters type faster, and the voice makes the sound;
   // estimateSeconds in src/script.ts mirrors these steps, this rate and the holds in stepDialog
-  const spoken = speech.active;
+  const spoken = speech.active && !voiceOut.active;
   it.acc += dt * 20 * prefs.bubbleSpeed;
   while (it.acc >= 1 && it.shown < text.length) {
     const ch = text[it.shown++];

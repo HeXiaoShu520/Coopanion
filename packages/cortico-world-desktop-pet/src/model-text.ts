@@ -144,8 +144,8 @@ const zh = {
     + (lasting.length ? `${lasting.join('、')} 会一直保持到下一个动作。` : '')
     + (dropped.length ? `\n[执行参数] 当前形象的词表里没有这些,已略过:${dropped.join('、')}。` : ''),
 
-  on: '开着',
-  off: '关着',
+  on: '语音输入开着。',
+  off: '语音输入关着。',
   /** `pet_set`'s items, named for the bot with the parameter each is. */
   settingNames: {
     figure: '形象(figure)', scheme: '打扮(scheme)', roam: '走动(roam)', snoreSeconds: '呼噜时长(snoreSeconds)', sound: '音效(sound)',
@@ -159,6 +159,8 @@ const zh = {
   selfNone: (user: string) => `${user}在「习惯」页把「自主配置权限」设成了「禁止」,现在这些你都改不了,\`pet_quiet\` 也用不了。`,
   /** `{{pet.chat}}`, when the app has a chat page. */
   chatPage: (_user: string) => '应用的「对话」页按时间列出这些气泡、对方的话,以及你两句话之间调用过的工具名;对方也能在那里打字、发图片(同样是 `[typed]` 事件,图片接在正文后),回答 `pet_ask`。`pet_say` 带的 `images` 只显示在对话页,头顶气泡不显示。',
+  /** `{{pet.voice}}` while replies are read aloud: a spoken turn is heard, so the words must sound right spoken. */
+  voiceRead: '语音输入开着;用语音问的那一轮,你的回答会被朗读成声音:少用列表、代码块和括号里的补充,句子短一点、像说话。',
   /** `{{pet.cua}}` while computer use is off on a system that runs it. */
   cuaOff: (user: string, canOpen: boolean) => `## 电脑操作\n\n电脑操作现在关着:你看不到屏幕,也动不了鼠标和键盘。${user}想让你看屏幕或帮忙操作电脑时,可以提出打开它:在设置窗口「习惯」页的「电脑操作」一节,打开前那里会讲清风险。` +
     (canOpen ? `${user}同意去打开的话,\`pet_cua_open_settings\` 把设置窗口直接打开到那里。` : ''),
@@ -270,8 +272,8 @@ const en: typeof zh = {
     + (lasting.length ? ` ${lasting.join(', ')} ${lasting.length > 1 ? 'are' : 'is'} held until the next action.` : '')
     + (dropped.length ? `\n[arguments] Not in the current figure's vocabulary, skipped: ${dropped.join(', ')}.` : ''),
 
-  on: 'on',
-  off: 'off',
+  on: 'Voice input is on.',
+  off: 'Voice input is off.',
   settingNames: {
     figure: 'figure', scheme: 'dress (scheme)', roam: 'walking (roam)', snoreSeconds: 'snoring time (snoreSeconds)', sound: 'sound effects (sound)',
     scale: 'size (scale)', bubbleSize: 'bubble size (bubbleSize)', fontSize: 'text size (fontSize)', theme: 'night or day look (theme)', hoverButtons: 'hover buttons (hoverButtons)', user: 'what you call them (user)',
@@ -282,6 +284,7 @@ const en: typeof zh = {
   selfNone: (user) => `${user} set "Self-adjustment" to "Off" on the Habits page, so right now you can change none of these, and \`pet_quiet\` does not work either.`,
   // the English template puts these right after a sentence, so they start with a space
   chatPage: (user) => ` The app's Chat page lists these bubbles in time order, with what ${user} said and the names of the tools you called between two lines; ${user} can also type and send images there (they arrive as \`[typed]\` events too, images after the text) and answer \`pet_ask\`. The \`images\` of \`pet_say\` show only on the Chat page, not in the bubble.`,
+  voiceRead: 'Voice input is on, and in a turn asked by voice your answer is read aloud: skip lists, code blocks and asides in brackets, and keep sentences short and spoken.',
   cuaOff: (user, canOpen) => `## Computer use\n\nComputer use is off: you cannot see the screen or use the mouse and keyboard. When ${user} wants you to look at the screen or help operate the computer, you can suggest turning it on: the Computer use section of the Habits page in the settings window, which explains the risks before it turns on.` +
     (canOpen ? ` If ${user} agrees to turn it on, \`pet_cua_open_settings\` opens the settings window right there.` : ''),
   cuaSettingsOpened: (user) => `The settings window is open at Computer use, showing what it risks; once ${user} clicks to turn it on, the computer-use tools are yours from the next message.`,

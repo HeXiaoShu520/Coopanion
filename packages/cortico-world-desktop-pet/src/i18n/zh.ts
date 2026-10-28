@@ -102,12 +102,53 @@ export default {
     noText: '接口的回应里没有 text',
   },
 
+  /** 火山豆包(引擎 doubao):识别与朗读共用一把 Key */
+  doubao: {
+    noKey: '还没有填写豆包 API Key',
+    badUrl: (url: string) => `豆包接口地址不是 ws 或 wss 网址：${url}`,
+    notRunning: '豆包识别没有启动',
+    connect: (why: string) => `连不上豆包：${why}`,
+    closed: '豆包断开了连接',
+    failed: (code: number, why: string) => `豆包返回错误 ${code}：${why}`,
+    badFrame: (why: string) => `看不懂豆包发来的数据：${why}`,
+    noText: '豆包没有听出文字',
+    gone: '这段要朗读的文字已经过去了',
+  },
+
+  /** 唤醒词(本地 KeywordSpotter) */
+  wake: {
+    noWords: '还没有写唤醒词',
+    incomplete: '唤醒词模型文件不完整，请重新下载',
+    loadFailed: (why: string) => `唤醒词模型载入失败：${why}`,
+    notListening: '唤醒词没有在听',
+    paused: '唤醒词接连出错，先歇一会儿',
+    /** 面板与配置里这一节的标题、开关、词表、灵敏度和间隔 */
+    group: '唤醒词',
+    enabled: {
+      title: '唤醒词',
+      description: '开着时，麦克风里出现这个词就让 Coo 开始听，不必按说话键；在本机识别，录音不上传',
+    },
+    keywords: {
+      title: '唤醒的词',
+      description: '一行一个，照 sherpa-onnx 关键词文件的写法：模型的 token 用空格分开，接 :分数 #阈值，@ 之后是给人看的词。例如“▁小 ▁可 :2.0 #0.4 @小可”。模型是中文 zipformer，token 要按它的词表写',
+    },
+    threshold: {
+      title: '灵敏度',
+      description: '越小越容易被唤醒，也越容易被别的声音触发；默认 0.25',
+    },
+    cooldownMs: { title: '两次唤醒的间隔' },
+    model: '唤醒词模型',
+    words: (words: string) => `会应这些词：${words}`,
+    hint: '一行一个唤醒词',
+  },
+
   /** 窗口运行时与识别模型的下载 */
   store: {
     noBuild: (platform: string) => `没有 ${platform} 的预编译包`,
     downloading: (file: string) => `下载 ${file}`,
     unpacking: '解压',
     downloadingModel: '下载识别模型',
+    downloadingWake: '下载唤醒词模型',
     downloadingFrom: (file: string, host: string) => `下载 ${file}（${host}）`,
     verifying: (file: string) => `校验 ${file}`,
     mismatch: (sum: string) => `校验不符：${sum}…`,
@@ -223,14 +264,14 @@ export default {
     dress: '装扮',
     panels: {
       pet: { title: '桌宠', description: '窗口、装扮与窗口运行时。' },
-      voice: { title: '语音输入', description: '识别引擎、电平与识别结果。' },
+      voice: { title: '语音', description: '识别引擎、电平与识别结果，以及朗读回复。' },
     } as Record<'pet' | 'voice', { title: string; description: string }>,
     envPrompt: { title: '桌宠环境', description: '描述桌宠的身体、四个工具与输入事件。' },
     vars: {
       'pet.user': '对使用者的称呼',
       'pet.vocab': '当前形象的表情与动作词表',
       'pet.moves': '当前形象自带的 pet_move_to 目标；没有时为空',
-      'pet.voice': '语音输入开着还是关着',
+      'pet.voice': '语音输入开着还是关着；开着朗读时，一并说明回答要适合念出来',
       'pet.body': '当前形象的样子',
       'pet.dress': 'pet_set 能选的形象与打扮',
       'pet.self': '「自主配置权限」：哪些设置直接改、哪些先征得同意，或都不能改',
@@ -285,11 +326,19 @@ export default {
     speechPitchHz: { title: '自定义音高' },
     speechSpeed: { title: '说话声语速', description: (a: number, b: number, c: number) => `每秒最多念几个音节：low、mid、high 依次为 ${a}、${b}、${c}；custom 用自定义语速。比文字慢时，声音在文字打完后才念完。` },
     speechRate: { title: '自定义语速', suffix: '音节/秒' },
+    ttsGroup: '朗读',
+    ttsEnabled: { title: '朗读回复', description: '用豆包把回复读出来。只有用语音问的那一轮会读，打字问的不读；「音效」总开关关着时不出声，音节叽咕声则只在「音效」里开关' },
+    ttsVoice: { title: '音色', description: '豆包语音合成里的音色 id，默认是通用女声；改完可以点「试听」' },
+    ttsSpeed: { title: '语速' },
+    ttsVolume: { title: '音量' },
+    ttsMaxChars: { title: '最长朗读', description: '一条回复最多读这么多字，多出来的不读' },
+    ttsClean: { title: '朗读前清洗', description: '去掉代码块、行内代码、链接、emoji 和过长的括号补充，只读能听懂的部分' },
     asrEnabled: { title: '语音输入总开关' },
-    asrEngine: { title: '识别引擎', description: 'funasr 用 FunASR 的 SenseVoiceSmall，支持中文、英文、日文、韩文和粤语，首次要下载约 240 MB 的模型；whisper 用 OpenAI 的 Whisper small，支持法语、德语、西班牙语、葡萄牙语、意大利语、俄语等近百种语言，首次要下载约 360 MB 的模型，一句说完才出字；这两个都在本机识别。system 用 Windows 自带的语音识别，不用下载，准确度低一些（只在 Windows 上有）。api 把每句录音发送给 OpenAI 兼容的转写接口识别，一句说完才出字；地址和模型在下面填写，API Key 在「语音输入」页填写。留空时按应用语言选：中文、英文、日文、韩文用 funasr，其余用 whisper。' },
+    asrEngine: { title: '识别引擎', description: 'funasr 用 FunASR 的 SenseVoiceSmall，支持中文、英文、日文、韩文和粤语，首次要下载约 240 MB 的模型；whisper 用 OpenAI 的 Whisper small，支持法语、德语、西班牙语、葡萄牙语、意大利语、俄语等近百种语言，首次要下载约 360 MB 的模型，一句说完才出字；这两个都在本机识别。system 用 Windows 自带的语音识别，不用下载，准确度低一些（只在 Windows 上有）。api 把每句录音发送给 OpenAI 兼容的转写接口识别，一句说完才出字；地址和模型在下面填写，API Key 在「语音输入」页填写。doubao 用火山豆包的流式识别，一边说一边出字，不用下载模型；地址在下面填写，API Key 在「语音」页填写，和朗读共用一把。留空时按应用语言选：中文、英文、日文、韩文用 funasr，其余用 whisper。' },
     asrLanguage: { title: '语言', description: 'ISO 639-1 语言代码，或 auto 让模型自己判断；留空时跟随应用语言。FunASR 认 zh、en、ja、ko、yue，Whisper 认 fr、de、es、pt、it、ru 等近百种，不认的代码按 auto。转写接口只在代码是两个字母时带上语言。' },
     asrApiUrl: { title: '转写接口地址', description: '引擎为 api 时，每句录音发送到这个地址后面的 /audio/transcriptions，例如 https://api.example.com/v1。远程地址只能用 https，本机和局域网的地址可以用 http。' },
     asrApiModel: { title: '转写模型', description: '引擎为 api 时请求里的模型名。' },
+    asrDoubaoUrl: { title: '豆包接口地址', description: '引擎为 doubao 时连接这个地址，留空用火山官方的 wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async。测试时可以让它指向本机。API Key 在「语音」页填写，识别和朗读共用这一把。' },
     asrThreads: { title: 'CPU 线程', description: 'FunASR 和 Whisper 一次识别用几个线程，0 = 2。' },
     asrSimplified: { title: '转成简体', description: '应用语言是简体中文时把识别出的繁体字转成简体。' },
     thresholdDb: { title: '说话门槛' },
@@ -340,6 +389,9 @@ export default {
     apiKey: 'API Key',
     keySaved: '已保存',
     keyMissing: '未填写',
+    doubao: '豆包语音识别（云端）',
+    doubaoName: '豆包语音识别',
+    doubaoHint: '豆包流式识别，说着话就出字，准确度高；同一个 Key 也用来朗读回复',
     server: '识别服务',
     start: '启动',
     stop: '停止',
@@ -382,6 +434,13 @@ export default {
     level: '输入音量',
     thresholdHint: '比这条线响的声音才算说话；别人说话和你一样响时也会被识别',
     noResults: '暂无识别结果',
+    /** 「朗读」一节:开关那一行、试听按钮和它正在合成时的字、音色一行的说明 */
+    read: '朗读回复',
+    preview: '试听',
+    previewing: '合成中…',
+    readHint: '用同一个 Key 合成；只有用语音问的那一轮会读',
+    previewSample: '你好呀，我是 Coo。今天天气不错。',
+    readOff: '朗读没有启用',
   },
 
   /** 对话页发消息被退回的原因与提示 */

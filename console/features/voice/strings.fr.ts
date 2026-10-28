@@ -1,3 +1,3 @@
 import type { en } from './strings.ts';
 
-export const S: Partial<typeof en> = { nav: 'Saisie vocale' };
+export const S: Partial<typeof en> = { nav: 'Voix' };

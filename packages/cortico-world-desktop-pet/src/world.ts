@@ -19,7 +19,7 @@
  * input uses by default. The console's text follows the console request's language.
  */
 import type { spawn } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import type {
@@ -30,19 +30,24 @@ import { nowIso, shortTime } from 'cortico/core/util.ts';
 import type { Language } from 'cortico/core/language.ts';
 import type { DeepPartial } from 'cortico/world.ts';
 import {
-  DESKTOP_PET_ID, MAX_HOVER_BUTTONS, PET_ACTIONS, SELF_KEYS, THRESHOLD_DB_MAX, THRESHOLD_DB_MIN, TOUCH_KINDS, USER_MAX, asrEngineFor,
+  DESKTOP_PET_ID, DEFAULT_TTS_VOICE, MAX_HOVER_BUTTONS, PET_ACTIONS, SELF_KEYS, THRESHOLD_DB_MAX, THRESHOLD_DB_MIN, TOUCH_KINDS, TTS_MAX_CHARS_MAX,
+  TTS_MAX_CHARS_MIN, TTS_SPEED_MAX, TTS_SPEED_MIN, USER_MAX, WAKE_COOLDOWN_MAX, WAKE_THRESHOLD_MAX, WAKE_THRESHOLD_MIN, asrEngineFor,
   desktopPetConfigGroups, directSettings, hoverButtonList, selfAdjustMode, speechFor, touchWakes,
   type AsrEngine, type DesktopPetConfigSection, type MicMode, type PetSkin, type PetTheme, type RoamMode, type SelfKey,
 } from './config.ts';
 import { capFor, cutChars, petText, type PetText } from './i18n/index.ts';
 import { SpeechText, speechTextSteps } from './speech/index.ts';
-import { PetServer, type PageMessage } from './server.ts';
+import { PetServer, wav, type PageMessage } from './server.ts';
 import { StatusTracker, type DescribeTool } from './status.ts';
 import { WindowHost, resolveHostCommand } from './window-host.ts';
-import { RuntimeStore, type ModelSpec } from './runtime/store.ts';
+import { RuntimeStore, type KwsModelSpec, type ModelSpec } from './runtime/store.ts';
 import { SENSEVOICE, SherpaAsr, WHISPER, type SherpaModelKind, type SherpaModule, type SherpaState } from './asr/sherpa.ts';
 import { SystemRecognizer, systemRecognizerSupported, type SystemRecognizerState, type SystemSentence } from './asr/system-recognizer.ts';
 import { TranscriptionApi, type TranscriptionState } from './asr/transcription-api.ts';
+import { DoubaoAsr, type DoubaoState } from './voice/doubao-asr.ts';
+import { DoubaoTts } from './voice/doubao-tts.ts';
+import { WakeWord, type WakeModule } from './voice/kws.ts';
+import { VoiceTurn, type TurnOptions } from './voice/turn.ts';
 import { Packer, Segmenter, rmsDb, type SegmentConfig, type SegmentSink, type Utterance } from './asr/segmenter.ts';
 import { comboLabel, hotkeyBadge, hotkeyLabel, parseHotkey, splitTaps, watchHotkey, type KeyWatcher } from './asr/hotkey.ts';
 import { joinSpeech, looksHallucinated } from './asr/result.ts';
@@ -107,6 +112,11 @@ const HOTKEY_POLL_MS = 30;
  * segmenter is flushed when the key goes up, and frames that arrive later are not used.
  */
 const MIC_RELEASE_MS = 500;
+/**
+ * How long a wake word keeps the gate open for what follows: long enough to take a breath and ask,
+ * short enough that the microphone goes back to hearing only the wake word.
+ */
+const WAKE_WINDOW_MS = 10_000;
 
 /**
  * Run controls an embedding app lends the pet's menu. Each button shows only when its control is
@@ -214,9 +224,16 @@ export interface DesktopPetWorldOptions {
   /** The speech models to download; tests pass small ones. */
   funasrModel?: ModelSpec;
   whisperModel?: ModelSpec;
+  /** The wake word model's archive; tests pass a small one. */
+  kwsModel?: KwsModelSpec;
+  /** Loads the keyword spotter; tests pass a fake. */
+  loadWake?: () => WakeModule;
   /** The transcription service's API Key, read at each request, and where the voice panel saves a new one; absent, there is none. */
   asrApiKey?: () => string;
   storeAsrApiKey?: (key: string) => void;
+  /** Doubao's API Key, read at each session, and where the voice panel saves a new one; recognition and synthesis share it. */
+  doubaoApiKey?: () => string;
+  storeDoubaoApiKey?: (key: string) => void;
   /** The bot's name for the menu header, the chat page and computer use's question; read at each use. */
   botName?: () => string;
   /** PNG shown as the avatar in the menu header, when it exists. */
@@ -248,8 +265,8 @@ export interface DesktopPetWorldOptions {
   onCuaAnswer?: (answer: Answer) => void;
 }
 
-type SherpaEngine = Exclude<AsrEngine, 'system' | 'api'>;
-type BackendState = SherpaState | SystemRecognizerState | TranscriptionState;
+type SherpaEngine = Exclude<AsrEngine, 'system' | 'api' | 'doubao'>;
+type BackendState = SherpaState | SystemRecognizerState | TranscriptionState | DoubaoState;
 
 interface PendingWalk {
   resolve: (text: string) => void;
@@ -346,6 +363,23 @@ export class DesktopPetWorld implements World {
   private whisper: SherpaAsr | null = null;
   private system: SystemRecognizer | null = null;
   private api: TranscriptionApi | null = null;
+  private doubao: DoubaoAsr | null = null;
+  /** Reads the replies of a turn that came from the microphone; made with the server, which the page pulls from. */
+  private tts: DoubaoTts | null = null;
+  /** The wake word: hears every frame the page sends, and what it hears opens the gate (src/voice/kws.ts). */
+  private wake: WakeWord | null = null;
+  /** What the spotter was built for: a changed word list or threshold builds another. */
+  private wakeKey = '';
+  /** A wake was heard and what follows is heard without the talk key, until this moment. */
+  private wakeUntil = 0;
+  /** This listening began with the wake word, so the word it began with is not an instruction (`stripWake`). */
+  private woke = false;
+  /**
+   * Which replies are read: turned on by what was heard, off by what was typed, silenced by a
+   * person who speaks again. Its cleaning options are kept here so a new `maxChars` applies at once.
+   */
+  private readonly turn: VoiceTurn;
+  private readonly turnOptions: TurnOptions = { off: () => !this.cfg.tts.enabled || !this.cfg.sound };
   /** The engine the running backend belongs to; a config change starts the other one. */
   private runningEngine: AsrEngine | null = null;
   private voiceGeneration = 0;
@@ -440,7 +474,22 @@ export class DesktopPetWorld implements World {
     this.status = new StatusTracker((status) => this.server.sendPet({ t: 'status', status }), opts.describeTool, () => this.ui.busy);
     this.segmenter = new Segmenter(this.segmentConfig(), FRAME_MS);
     this.segmenter.setSink(this.sink);
-    this.store = new RuntimeStore({ runtimesRoot: opts.runtimesRoot, modelsDir: opts.modelsDir, fetchImpl: opts.fetchImpl, funasrModel: opts.funasrModel, whisperModel: opts.whisperModel, text: () => this.ui });
+    // a reply is read in the bubble's id: the page pulls its pieces by number and says when the last one played
+    this.turnOptions.maxChars = this.cfg.tts.maxChars;
+    this.turnOptions.clean = this.cfg.tts.clean;
+    this.turn = new VoiceTurn({
+      speak: ({ id, pieces }) => {
+        // no engine means no sound: the words stay on screen, and the page is not asked to pull them
+        if (!this.tts) return;
+        this.tts.reply(id, pieces);
+        this.server.sendPet({ t: 'speak', id, pieces: pieces.length });
+      },
+      stop: () => {
+        this.tts?.cancel();
+        this.server.sendPet({ t: 'speak-stop' });
+      },
+    }, this.turnOptions);
+    this.store = new RuntimeStore({ runtimesRoot: opts.runtimesRoot, modelsDir: opts.modelsDir, fetchImpl: opts.fetchImpl, funasrModel: opts.funasrModel, whisperModel: opts.whisperModel, kwsModel: opts.kwsModel, text: () => this.ui });
     this.server = new PetServer({
       port: () => this.cfg.port,
       webDir: WEB_DIR,
@@ -459,6 +508,7 @@ export class DesktopPetWorld implements World {
       text: () => this.ui,
       overlay: () => this.cfg.window.exportOverlay,
       speech: (text) => this.speechText.units(text, this.appLanguage),
+      tts: () => this.tts,
     });
   }
 
@@ -668,7 +718,34 @@ export class DesktopPetWorld implements World {
       text: () => this.ui,
       log: host.log,
     });
+    this.doubao = new DoubaoAsr({
+      config: () => this.cfg.asr.doubao,
+      key: () => this.opts.doubaoApiKey?.() ?? '',
+      language: () => this.asrLanguage(),
+      uid: () => DESKTOP_PET_ID,
+      timeoutMs: () => this.cfg.asr.timeoutMs,
+      text: () => this.ui,
+      log: host.log,
+    });
+    // the made pieces stay under the runtime directory, so a repeated line costs nothing next run too
+    this.tts = new DoubaoTts({
+      config: () => ({ voice: this.cfg.tts.voice }),
+      key: () => this.opts.doubaoApiKey?.() ?? '',
+      cacheDir: () => join(this.opts.runtimesRoot(), DESKTOP_PET_ID, 'tts'),
+      text: () => this.ui,
+      log: host.log,
+    });
     this.cuaSeen = this.cfg.cua.enabled;
+    // the keywords file the spotter is built from lives beside what the runtimes download
+    this.wake = new WakeWord({
+      model: () => this.wakeModel(),
+      keywordsFile: () => this.keywordsFile(),
+      settings: () => ({ threshold: this.cfg.wake.threshold, cooldownMs: this.cfg.wake.cooldownMs, threads: this.cfg.asr.threads }),
+      log: host.log,
+      text: () => this.ui,
+      load: this.opts.loadWake,
+    });
+    if (this.cfg.wake.enabled) void this.syncWake();
     if (this.cfg.asr.enabled) void this.startVoiceBackend();
     await this.syncHotkey();
     await this.syncTypeKey();
@@ -679,6 +756,11 @@ export class DesktopPetWorld implements World {
   async stop(): Promise<void> {
     this.voiceGeneration++;
     this.runningEngine = null;
+    // the page goes with this process: nothing still being synthesized is worth finishing
+    this.tts?.cancel();
+    this.tts = null;
+    this.wake?.stop();
+    this.wake = null;
     this.status.clear();
     if (this.quiet) clearTimeout(this.quiet.timer);
     this.quiet = null;
@@ -719,6 +801,8 @@ export class DesktopPetWorld implements World {
 
   onTurnEnded(): void {
     this.touchWoke = false;
+    // the turn is over: what still sounds is left to finish, but the words after it are read only if they are asked for again
+    this.turn.end();
     this.cua.onTurnEnded();
   }
 
@@ -893,6 +977,8 @@ export class DesktopPetWorld implements World {
       sound: this.quiet?.sound ?? this.cfg.sound,
       sounds: this.cfg.sounds,
       speech: speechFor(this.cfg.speech),
+      // reading replies aloud: the page sets its volume and pace from this and plays the pulled pieces
+      tts: { enabled: this.cfg.tts.enabled, speed: this.cfg.tts.speed, volume: this.cfg.tts.volume },
       theme: this.cfg.theme,
       rememberPosition: this.cfg.rememberPosition,
       // read by the page from `init` only
@@ -955,6 +1041,9 @@ export class DesktopPetWorld implements World {
   /** Config is a live object edited by the console; changes reach the pages within PREFS_SYNC_MS. */
   private syncPrefs(): void {
     this.segmenter.configure(this.segmentConfig());
+    // a shortened reply limit reaches the turn at once: the turn keeps this object and reads it per reply
+    this.turnOptions.maxChars = this.cfg.tts.maxChars;
+    this.turnOptions.clean = this.cfg.tts.clean;
     const turnedOn = this.cfg.asr.enabled && !this.voiceEnabled;
     this.voiceEnabled = this.cfg.asr.enabled;
     if (!this.cfg.asr.enabled && this.runningEngine) void this.stopVoiceBackend();
@@ -963,13 +1052,16 @@ export class DesktopPetWorld implements World {
     else if (this.cfg.asr.enabled && this.runningEngine === 'system' && this.system?.languageChanged) void this.startVoiceBackend();
     // the transcription service starts again for a new address or model, a failed one included; `setApi` starts it for a new API Key
     else if (this.cfg.asr.enabled && this.runningEngine === 'api' && this.api?.configChanged) void this.startVoiceBackend();
+    // Doubao starts again for a new address; `setDoubao` starts it for a new API Key
+    else if (this.cfg.asr.enabled && this.runningEngine === 'doubao' && this.doubao?.configChanged) void this.startVoiceBackend();
     // FunASR and Whisper load the model for one language and thread count
-    else if (this.cfg.asr.enabled && this.runningEngine && this.runningEngine !== 'system' && this.runningEngine !== 'api' && this.sherpa(this.runningEngine)?.configChanged) void this.startVoiceBackend();
+    else if (this.cfg.asr.enabled && this.runningEngine && this.runningEngine !== 'system' && this.runningEngine !== 'api' && this.runningEngine !== 'doubao' && this.sherpa(this.runningEngine)?.configChanged) void this.startVoiceBackend();
     // computer use switched off ends the engine process; the next call after it is switched on starts another
     if (this.cuaSeen && !this.cfg.cua.enabled) void this.cua.switchedOff();
     this.cuaSeen = this.cfg.cua.enabled;
     void this.syncHotkey();
     void this.syncTypeKey();
+    void this.syncWake();
     // the person changed what a quiet holds back: theirs wins
     if (this.quiet && (this.cfg.sound !== this.quiet.base.sound || this.cfg.roam !== this.quiet.base.roam)) this.endQuiet();
     this.server.syncOverlay();
@@ -993,8 +1085,9 @@ export class DesktopPetWorld implements World {
     return this.cfg.asr.mic.mode === 'hold' && this.cfg.asr.mic.openOnPress;
   }
 
-  /** The pet page keeps the microphone open: whenever voice input can hear, or only around a held talk key (`micOnPress`). */
+  /** The pet page keeps the microphone open: whenever voice input can hear, or only around a held talk key (`micOnPress`); a wake word needs it open all the while. */
   private micOpen(): boolean {
+    if (this.wakeListening()) return this.micWanted();
     return this.micWanted() && (!this.micOnPress() || this.micHeld);
   }
 
@@ -1107,6 +1200,8 @@ export class DesktopPetWorld implements World {
         const images = parseChatImages(msg.images, this.userName, petText(this.appLanguage).chat, this.t);
         if (!images.ok) { this.log?.warn(`打字框发来的图片没有收下:${images.reason}`); return; }
         if (!text && images.blobs.length === 0) return;
+        // typing is not speaking: this text was not heard, and what was being read stops
+        this.turn.typed();
         void this.push('desktop-pet.message', 'desktop-pet.text', this.t.typed(this.userName, text), 'preempt',
           { meta: { via: 'bubble', text }, ...(images.blobs.length ? { blobs: images.blobs } : {}) });
         return;
@@ -1163,6 +1258,10 @@ export class DesktopPetWorld implements World {
       }
       case 'commit': return this.commitSpeech();
       case 'cancel': return this.cancelSpeech();
+      // the page finished reading bubble `id`: the turn no longer waits on it
+      case 'spoke': this.turn.finished(String(msg.id)); return;
+      // the person took the bubble away before its words were done
+      case 'spoke-stop': this.turn.interrupt(); return;
     }
   }
 
@@ -1375,15 +1474,17 @@ export class DesktopPetWorld implements World {
   /** The sherpa-onnx engine whose model voice input downloads: the one in force, else the app language's. */
   private modelEngine(): SherpaEngine {
     const engine = this.engine();
-    return engine === 'system' || engine === 'api' ? asrEngineFor('', this.appLanguage, false) as SherpaEngine : engine;
+    return engine === 'system' || engine === 'api' || engine === 'doubao' ? asrEngineFor('', this.appLanguage, false) as SherpaEngine : engine;
   }
 
   private sherpa(engine: SherpaEngine): SherpaAsr | null {
     return engine === 'whisper' ? this.whisper : this.funasr;
   }
 
-  private recognizer(engine = this.engine()): SherpaAsr | SystemRecognizer | TranscriptionApi | null {
-    return engine === 'system' ? this.system : engine === 'api' ? this.api : this.sherpa(engine);
+  private recognizer(engine = this.engine()): SherpaAsr | SystemRecognizer | TranscriptionApi | DoubaoAsr | null {
+    if (engine === 'system') return this.system;
+    if (engine === 'api') return this.api;
+    return engine === 'doubao' ? this.doubao : this.sherpa(engine);
   }
 
   /** The recognition language: the set one, else the app language's ISO 639-1 code; FunASR and Whisper read a code they do not take as `auto`. */
@@ -1430,16 +1531,22 @@ export class DesktopPetWorld implements World {
 
   /** Audio reaches the segmenter only while this is true. */
   private gateOpen(): boolean {
-    return this.cfg.asr.mic.mode === 'always' || this.talking;
+    return this.cfg.asr.mic.mode === 'always' || this.talking || this.wakeOpen();
+  }
+
+  /** A wake word opened the gate a moment ago: what follows is heard as a sentence, without the talk key. */
+  private wakeOpen(): boolean {
+    return this.woke && Date.now() < this.wakeUntil;
   }
 
   /**
    * While the talk key is held everything counts as speech: the segmenter never waits for a
-   * loud onset or cuts at a pause, and releasing the key ends the utterance.
+   * loud onset or cuts at a pause, and releasing the key ends the utterance. A wake word does not
+   * hold anything down, so what follows it is heard as `always` hears: a sentence between pauses.
    */
   private segmentConfig(): SegmentConfig {
     const seg = this.cfg.asr.segment;
-    return this.cfg.asr.mic.mode === 'hold' ? { ...seg, thresholdDb: -Infinity, minSpeechMs: 0 } : seg;
+    return this.cfg.asr.mic.mode === 'hold' && this.talking ? { ...seg, thresholdDb: -Infinity, minSpeechMs: 0 } : seg;
   }
 
   /** Starts, restarts or stops the key watcher to match the configured mode and key. */
@@ -1512,6 +1619,8 @@ export class DesktopPetWorld implements World {
   private setTalking(on: boolean): void {
     if (this.talking === on) return;
     this.talking = on;
+    // a held key hears everything as speech; letting go gives the segmenter its pauses back
+    this.segmenter.configure(this.segmentConfig());
     this.voiceFrame({ type: 'gate', open: on });
     if (!on) this.releaseMicSoon();
     if (!this.cfg.asr.enabled || !this.micWanted()) return;
@@ -1534,9 +1643,11 @@ export class DesktopPetWorld implements World {
    * nothing to send; a switched-on one is switched off.
    */
   private cancelSpeech(): void {
-    if (this.cfg.asr.mic.mode === 'always' || (!this.talking && !this.listenOpen)) return;
+    if (this.cfg.asr.mic.mode === 'always' || (!this.talking && !this.listenOpen && !this.wakeOpen())) return;
+    this.endWake();
     if (this.talking) {
       this.talking = false;
+      this.segmenter.configure(this.segmentConfig());
       this.voiceFrame({ type: 'gate', open: false });
       this.releaseMicSoon();
     }
@@ -1580,11 +1691,18 @@ export class DesktopPetWorld implements World {
 
   private onAudio(frame: Int16Array): void {
     if (!this.cfg.asr.enabled || !this.micWanted()) return;
+    // the wake word hears every frame, gate or no gate: hearing it is what opens the gate
+    const woke = this.wake?.feed(frame) ?? null;
+    if (woke) this.onWake(woke);
     const open = this.gateOpen();
     if (open) for (const u of this.segmenter.push(frame)) this.enqueue(u);
     this.level = open ? this.segmenter.level : rmsDb(frame);
     const speaking = open && this.segmenter.active;
-    if (speaking && !this.wasSpeaking) this.server.sendPet({ t: 'listen', phase: 'start' });
+    if (speaking && !this.wasSpeaking) {
+      this.server.sendPet({ t: 'listen', phase: 'start' });
+      // the person is talking again: whatever was being read stops now, before a word of it is answered
+      this.turn.interrupt();
+    }
     this.wasSpeaking = speaking;
     const now = Date.now();
     if (now - this.lastLevelAt >= 100) {
@@ -1610,12 +1728,21 @@ export class DesktopPetWorld implements World {
         if (cancels !== this.cancels) continue;
         let text = res.text;
         if (this.simplifies) text = toSimplified(text);
+        // the word that woke the pet is not part of what it was asked
+        if (this.woke) text = this.stripWake(text);
         if (res.error || looksHallucinated(text)) {
           this.counts.dropped++;
           this.remember({ text: res.error ? this.ui.voice.failedLine(res.error) : text, at: Date.now(), ms: res.ms, dropped: true });
           this.voiceFrame({ type: 'dropped', text: res.error ?? text, ms: res.ms });
           // the page was showing this sentence as it was heard: take it back
           if (u.result) this.showHeard();
+          continue;
+        }
+        if (!text) {
+          // nothing but the wake word: there is no one to answer
+          this.counts.dropped++;
+          this.partial = '';
+          this.showHeard();
           continue;
         }
         this.packer.add(text);
@@ -1634,6 +1761,107 @@ export class DesktopPetWorld implements World {
   private pendingText(add: string): string {
     this.partial = joinSpeech([this.partial, add]);
     return this.partial;
+  }
+
+  /* ---------- the wake word ---------- */
+
+  /** A word was heard: what follows is listened to as if the talk key had been pressed. */
+  private onWake(word: string): void {
+    if (!this.cfg.asr.enabled || !this.micWanted()) return;
+    this.woke = true;
+    this.wakeUntil = Date.now() + WAKE_WINDOW_MS;
+    // what follows is a sentence between pauses, not one held down by a key
+    this.segmenter.configure(this.segmentConfig());
+    this.listenOpen = true;
+    this.server.sendPet({ t: 'listen', phase: 'start' });
+    // it was called: what it was reading out stops, as it stops when the person speaks again
+    this.turn.interrupt();
+    this.log?.info(`唤醒词「${word}」,开始听`);
+  }
+
+  /** The listening a wake word opened is over: the microphone hears nothing but the word again. */
+  private endWake(): void {
+    if (!this.woke) return;
+    this.woke = false;
+    this.wakeUntil = 0;
+    this.segmenter.configure(this.segmentConfig());
+  }
+
+  /** The spotter is hearing, so the microphone has to stay open for it. */
+  private wakeListening(): boolean {
+    return this.cfg.wake.enabled && this.wake?.state().phase === 'listening';
+  }
+
+  /** The wake word model's files by role, or why they are not there. */
+  private wakeModel(): { paths: Record<string, string> } | { missing: string } {
+    if (this.store.kws.state().phase !== 'ready') return { missing: this.ui.panel.notDownloaded };
+    return { paths: this.store.kws.paths() };
+  }
+
+  /** The keywords file the spotter is built from, written from the config beside the runtimes' downloads. */
+  private keywordsFile(): string {
+    const dir = join(this.opts.runtimesRoot(), DESKTOP_PET_ID);
+    const file = join(dir, 'wake-keywords.txt');
+    const body = `${this.cfg.wake.keywords.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join('\n')}\n`;
+    try {
+      mkdirSync(dir, { recursive: true });
+      if (!existsSync(file) || readFileSync(file, 'utf8') !== body) writeFileSync(file, body);
+    } catch (err) {
+      this.log?.warn(`唤醒词的词表写不下:${(err as Error).message}`);
+    }
+    return file;
+  }
+
+  /**
+   * Starts, restarts or stops the spotter to match `wake.enabled`. The spotter reads the keywords
+   * file and the threshold once, when it is built, so a change to either builds another.
+   */
+  private async syncWake(): Promise<void> {
+    const wake = this.wake;
+    if (!wake) return;
+    const before = this.micOpen();
+    // no microphone frames without voice input, so no spotter either: nothing to hear, nothing to spend
+    if (!this.cfg.wake.enabled || !this.cfg.asr.enabled) {
+      wake.stop();
+      this.wakeKey = '';
+      this.endWake();
+    } else {
+      const key = JSON.stringify([this.cfg.wake.keywords, this.cfg.wake.threshold]);
+      if (key !== this.wakeKey) {
+        this.wakeKey = key;
+        await wake.start();
+        const state = wake.state();
+        if (state.phase === 'listening') this.log?.info(`唤醒词在听:${state.words.join('、')}`);
+        else if (state.detail) this.log?.warn(`唤醒词没有在听:${state.detail}`);
+      }
+    }
+    // the microphone opens and closes with the spotter, and the page has to know before it stops sending
+    if (this.micOpen() !== before) this.server.sendPet({ t: 'prefs', mic: this.micOpen() });
+  }
+
+  /** Downloads the wake word model, then starts the spotter if the wake word is on. */
+  async installWake(): Promise<void> {
+    const slot = this.store.kws;
+    if (slot.state().phase !== 'ready') await slot.install();
+    // the model's files are part of what a spotter is built from
+    this.wakeKey = '';
+    await this.syncWake();
+  }
+
+  /**
+   * The wake word is not an instruction: taken off the front of what was heard, "小可，今天几号"
+   * is the question alone. The words are the keywords file's own, which is what recognition tends
+   * to make of them too; anything else is left where it is.
+   */
+  private stripWake(text: string): string {
+    if (!this.woke) return text;
+    let out = text;
+    for (const word of this.wake?.words() ?? []) {
+      if (!word) continue;
+      const at = out.indexOf(word);
+      if (at >= 0 && at <= 4) out = out.slice(0, at) + out.slice(at + word.length);
+    }
+    return out.replace(/^[\s,，.。、!！?？~～]+/, '').trim();
   }
 
   /* ---------- hearing as it is spoken ---------- */
@@ -1693,8 +1921,12 @@ export class DesktopPetWorld implements World {
       this.committing = false;
       this.partial = '';
       this.listenOpen = false;
+      // the sentence a wake word opened is over: the next one is asked for by the word again
+      this.endWake();
       this.counts.delivered++;
       this.server.sendPet({ t: 'listen', phase: 'heard', text });
+      // these words came from the microphone: what Coo answers them is read aloud
+      this.turn.heard();
       void this.push('desktop-pet.speech', 'desktop-pet.voice', this.t.heard(this.userName, text), 'flush', { meta: { text } });
       return;
     }
@@ -1753,9 +1985,13 @@ export class DesktopPetWorld implements World {
     const { beats, dropped } = parseScript(script, this.vocab());
     const spoken = beats.some((b) => b.text || b.actions.length || b.anchors.length);
     if (!spoken && shown.blobs.length === 0) return { text: this.t.sayEmpty, failed: true };
-    if (spoken && !this.server.sendPet({ t: 'say', id: nextId('s'), beats })) return this.notConnected('pet_say');
+    const said = beats.map((b) => b.text).join('');
+    const id = nextId('s');
+    if (spoken && !this.server.sendPet({ t: 'say', id, beats })) return this.notConnected('pet_say');
+    // a turn that came from the microphone is heard as well as read: the same id carries the bubble and its voice
+    if (spoken) this.turn.reply(id, said);
     void this.closeActivity();
-    void this.record({ kind: 'say', beats: beats.map((b) => ({ text: b.text, ...moodOf(b.actions, this.vocab()) })) }, beats.map((b) => b.text).join(''), shown.blobs);
+    void this.record({ kind: 'say', beats: beats.map((b) => ({ text: b.text, ...moodOf(b.actions, this.vocab()) })) }, said, shown.blobs);
     if (!spoken) return { text: this.t.imagesShown(shown.blobs.length, this.chat.size > 0) };
     const now = Date.now();
     const selfSec = estimateSeconds(beats, this.cfg.window.bubbleSpeed, this.cfg.speech.enabled ? speechTextSteps : undefined);
@@ -1927,7 +2163,8 @@ export class DesktopPetWorld implements World {
       'pet.user': user,
       'pet.vocab': vocabTable(this.vocab(), language),
       'pet.moves': moveTable(this.moves(), language),
-      'pet.voice': this.cfg.asr.enabled ? t.on : t.off,
+      // replies to a spoken turn are read aloud: the bot is told to write words that sound right spoken
+      'pet.voice': this.cfg.asr.enabled ? (this.cfg.tts.enabled ? t.voiceRead : t.on) : t.off,
       'pet.body': this.bodyText(this.currentPack()),
       'pet.dress': dressTable(this.packs(), language),
       'pet.self': this.selfText(),
@@ -2044,7 +2281,7 @@ export class DesktopPetWorld implements World {
         case 'stop': await this.stopVoiceBackend(); return this.voiceState();
         case 'setEngine': {
           const engine = args[0];
-          if (engine === 'funasr' || engine === 'whisper' || engine === 'system' || engine === 'api') this.opts.persist({ asr: { engine } });
+          if (engine === 'funasr' || engine === 'whisper' || engine === 'system' || engine === 'api' || engine === 'doubao') this.opts.persist({ asr: { engine } });
           if (this.cfg.asr.enabled) await this.startVoiceBackend();
           return this.voiceState();
         }
@@ -2059,7 +2296,40 @@ export class DesktopPetWorld implements World {
           if (this.cfg.asr.enabled && this.engine() === 'api') await this.startVoiceBackend();
           return this.voiceState();
         }
+        // Doubao: the address goes to the config, the API Key to the deployment's secrets, shared with reading aloud
+        case 'setDoubao': {
+          const raw = args[0] && typeof args[0] === 'object' ? args[0] as Record<string, unknown> : {};
+          if (typeof raw.baseUrl === 'string') this.opts.persist({ asr: { doubao: { baseUrl: raw.baseUrl.trim() } } });
+          if (typeof raw.key === 'string' && raw.key.trim()) this.opts.storeDoubaoApiKey?.(raw.key.trim());
+          if (this.cfg.asr.enabled && this.engine() === 'doubao') await this.startVoiceBackend();
+          return this.voiceState();
+        }
         case 'setEnabled': this.savePrefs({ mic: args[0] === true }); return this.voiceState();
+        // reading aloud: the settings live here, the Key is the one Doubao's recognition uses
+        case 'setTts': {
+          const raw = args[0] && typeof args[0] === 'object' ? args[0] as Record<string, unknown> : {};
+          const tts: Partial<DesktopPetConfigSection['tts']> = {};
+          if (typeof raw.enabled === 'boolean') tts.enabled = raw.enabled;
+          if (typeof raw.voice === 'string') tts.voice = raw.voice.trim() || DEFAULT_TTS_VOICE;
+          if (typeof raw.speed === 'number' && Number.isFinite(raw.speed)) tts.speed = Math.min(TTS_SPEED_MAX, Math.max(TTS_SPEED_MIN, raw.speed));
+          if (typeof raw.volume === 'number' && Number.isFinite(raw.volume)) tts.volume = Math.min(1, Math.max(0, raw.volume));
+          if (typeof raw.maxChars === 'number' && Number.isFinite(raw.maxChars)) tts.maxChars = Math.round(Math.min(TTS_MAX_CHARS_MAX, Math.max(TTS_MAX_CHARS_MIN, raw.maxChars)));
+          if (typeof raw.clean === 'boolean') tts.clean = raw.clean;
+          if (Object.keys(tts).length) this.opts.persist({ tts });
+          // switched off: what is being read stops now rather than finishing unheard
+          if (tts.enabled === false) this.turn.interrupt();
+          this.syncPrefs();
+          return this.voiceState();
+        }
+        // the panel's try-listen: one short text synthesized whole, as a WAV the panel plays
+        case 'preview': {
+          const text = typeof args[0] === 'string' ? args[0].trim().slice(0, this.cfg.tts.maxChars) : '';
+          if (!text) throw new Error(this.ui.console.unknownMethod('voice.preview'));
+          if (!this.tts) throw new Error(this.ui.panel.readOff);
+          const { pcm, error } = await this.tts.preview(text);
+          if (!pcm.length) return { error: error ?? this.ui.doubao.gone };
+          return { audio: Buffer.from(wav(pcm)).toString('base64') };
+        }
         case 'setMic': {
           this.savePrefs({ micSettings: args[0] });
           await this.syncHotkey();
@@ -2071,6 +2341,19 @@ export class DesktopPetWorld implements World {
           if (typeof db === 'number' && Number.isFinite(db)) this.opts.persist({ asr: { segment: { thresholdDb: Math.max(THRESHOLD_DB_MIN, Math.min(THRESHOLD_DB_MAX, db)) } } });
           return this.voiceState();
         }
+        // the wake word: its settings, then the spotter is built again for the words and threshold now set
+        case 'setWake': {
+          const raw = args[0] && typeof args[0] === 'object' ? args[0] as Record<string, unknown> : {};
+          const wake: Partial<DesktopPetConfigSection['wake']> = {};
+          if (typeof raw.enabled === 'boolean') wake.enabled = raw.enabled;
+          if (typeof raw.keywords === 'string') wake.keywords = raw.keywords;
+          if (typeof raw.threshold === 'number' && Number.isFinite(raw.threshold)) wake.threshold = Math.min(WAKE_THRESHOLD_MAX, Math.max(WAKE_THRESHOLD_MIN, raw.threshold));
+          if (typeof raw.cooldownMs === 'number' && Number.isFinite(raw.cooldownMs)) wake.cooldownMs = Math.round(Math.min(WAKE_COOLDOWN_MAX, Math.max(0, raw.cooldownMs)));
+          if (Object.keys(wake).length) this.opts.persist({ wake });
+          await this.syncWake();
+          return this.voiceState();
+        }
+        case 'installWake': void this.installWake(); return this.voiceState();
       }
     }
     throw new Error(this.ui.console.unknownMethod(`${panel}.${method}`));
@@ -2130,6 +2413,18 @@ export class DesktopPetWorld implements World {
       model: { ...model.state(), bytes: model.bytes, engine: modelEngine },
       /** The transcription service's settings; of the API Key only whether one is saved. */
       api: { ...this.cfg.asr.api, keySaved: (this.opts.asrApiKey?.() ?? '') !== '' },
+      /** Doubao's settings; of the API Key only whether one is saved. */
+      doubao: { ...this.cfg.asr.doubao, keySaved: (this.opts.doubaoApiKey?.() ?? '') !== '' },
+      /** Reading replies aloud: the settings, and why nothing can be read (no Key) with the panel's try-listen. */
+      tts: { ...this.cfg.tts, problem: this.tts?.problem() ?? null },
+      /** The wake word: the settings, the words it answers to, and why it is not hearing. */
+      wake: {
+        ...this.cfg.wake,
+        phase: this.wake?.state().phase ?? 'stopped',
+        detail: this.wake?.problem() ?? null,
+        words: this.wake?.words() ?? [],
+        model: this.store.kws.state(),
+      },
       mic: this.micState,
       input: {
         ...this.cfg.asr.mic,

@@ -7,6 +7,10 @@
  * - `/dress`: the dressing page; changes go through `POST /api/skin` and `POST /api/prefs`.
  * - `/api/avatar`: the bot's avatar for the menu header, 404 until one exists.
  * - `POST /api/speech` (`{ text }`): the syllables the pet page's speech plays for a bubble's text (src/speech).
+ * - `/api/tts`: reading a reply aloud (src/voice/doubao-tts). The pet page pulls one piece of the reply under
+ *   bubble `id` at a time (`GET /api/tts/audio?id=…&i=…`, raw 24 kHz PCM, written as it is synthesized), `POST /api/tts`
+ *   (`{ text }`) reads a text no bubble owns, `POST /api/tts/preview` (`{ text }`) answers the same audio as one WAV for
+ *   the console's try-listen, and `POST /api/tts/cancel` stops whatever is still arriving. 404 without a synthesizer.
  * - `/api/figures`: the figure packs (src/packs.ts) the pages may load, Coo's first, each with whether it
  *   can be uninstalled (`removable`); `/packs/<id>/…`: an installed pack's files (a built-in one is under
  *   `/web/`). `/api/figures/status`: the installed packs that did not load and why, and whether packs can be
@@ -37,6 +41,8 @@ import { packFile, type FigurePack, type PackProblem } from './packs.ts';
 import { BUNDLE_TYPE, IMPORT_MAX, PACK_DEPTH, filesFromBundle, filesFromZip, type PackImporter } from './pack-import.ts';
 import { petText, type PetText } from './i18n/index.ts';
 import type { SpeechUnit } from './speech/index.ts';
+import { TTS_SAMPLE_RATE } from './voice/protocol.ts';
+import type { DoubaoTts } from './voice/doubao-tts.ts';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -92,6 +98,8 @@ export interface PetServerOptions {
   overlay?(): boolean;
   /** The syllables `text` is spoken as; `POST /api/speech` answers 404 without it. */
   speech?(text: string): SpeechUnit[];
+  /** Reading replies aloud; `/api/tts` answers 404 without it. */
+  tts?(): DoubaoTts | null;
 }
 
 export class PetServer {
@@ -355,6 +363,8 @@ export class PetServer {
       if (typeof msg?.text !== 'string') return json(res, 400, { error: 'bad json' });
       return json(res, 200, { units: this.opts.speech(msg.text) });
     }
+    if (req.method === 'POST' && path.startsWith('/api/tts')) return this.ttsRequest(req, res, url);
+    if (this.opts.tts && req.method === 'GET' && path === '/api/tts/audio') return this.ttsAudio(res, url);
     if (req.method === 'POST' && (path === '/api/skin' || path === '/api/prefs')) {
       const body = await readBody(req);
       const msg = body ? parse(body) : null;
@@ -388,6 +398,62 @@ export class PetServer {
     } catch {
       res.writeHead(404).end();
     }
+  }
+
+  /** The writes of `/api/tts`: a text read at once, a try-listen as one WAV, and stopping what is arriving. */
+  private async ttsRequest(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    const tts = this.opts.tts?.();
+    if (!tts) { res.writeHead(404).end(); return; }
+    const path = url.pathname;
+    if (path === '/api/tts/cancel') { tts.cancel(); return json(res, 200, { ok: true }); }
+    if (path !== '/api/tts' && path !== '/api/tts/preview') return json(res, 404, { error: 'not found' });
+    const msg = parse(await readBody(req) ?? '');
+    if (typeof msg?.text !== 'string') return json(res, 400, { error: 'bad json' });
+    const text = msg.text.trim().slice(0, TTS_TEXT_MAX);
+    if (!text) return json(res, 400, { error: 'bad json' });
+    if (path === '/api/tts/preview') {
+      const { pcm, error } = await tts.preview(text);
+      // a piece already made answers even with no Key: the panel's try-listen still plays it
+      if (!pcm.length) return json(res, 503, { error: error ?? this.t.doubao.gone });
+      return sendBytes(res, 'audio/wav', wav(pcm));
+    }
+    return this.streamTts(res, (onChunk, signal) => tts.speak(text, onChunk, signal));
+  }
+
+  /** One piece of the reply being read, by its bubble and number, as raw PCM. */
+  private async ttsAudio(res: ServerResponse, url: URL): Promise<void> {
+    const tts = this.opts.tts?.();
+    if (!tts) { res.writeHead(404).end(); return; }
+    const id = url.searchParams.get('id') ?? '';
+    const index = Number(url.searchParams.get('i') ?? '0');
+    if (!id || !Number.isInteger(index) || index < 0) return json(res, 400, { error: 'bad request' });
+    return this.streamTts(res, (onChunk, signal) => tts.speakReply(id, index, onChunk, signal));
+  }
+
+  /**
+   * Writes what `run` synthesizes as it arrives. Nothing is sent until the first chunk, so a failure
+   * before any audio still answers with a reason; after it the only thing left is to cut the stream,
+   * which the page takes as the end of that piece. A page that goes away stops the synthesis.
+   */
+  private async streamTts(res: ServerResponse, run: (onChunk: (pcm: Uint8Array) => void, signal: AbortSignal) => Promise<string | null>): Promise<void> {
+    const stop = new AbortController();
+    res.on('close', () => stop.abort());
+    let opened = false;
+    const failure = await run((pcm) => {
+      if (!opened) {
+        opened = true;
+        res.writeHead(200, {
+          'content-type': `audio/L16; rate=${TTS_SAMPLE_RATE}; channels=1`,
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+          'content-security-policy': PAGE_CSP,
+        });
+      }
+      res.write(pcm);
+    }, stop.signal);
+    if (!opened) return json(res, failure ? 503 : 200, failure ? { error: failure } : { ok: true });
+    if (failure) res.destroy();
+    else res.end();
   }
 
   private async importRequest(req: IncomingMessage, res: ServerResponse, path: string, importer: PackImporter): Promise<void> {
@@ -442,6 +508,33 @@ function parse(text: string): PageMessage | null {
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
+}
+
+/** Longest text one `/api/tts` request reads, in characters; the console's own limit is below this. */
+const TTS_TEXT_MAX = 600;
+
+function sendBytes(res: ServerResponse, type: string, bytes: Uint8Array): void {
+  res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+  res.end(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+}
+
+/** `pcm` (24 kHz mono 16-bit) with a WAV header, which an `<audio>` element plays and raw PCM is not. */
+export function wav(pcm: Uint8Array): Uint8Array {
+  const head = Buffer.alloc(44);
+  head.write('RIFF', 0, 'ascii');
+  head.writeUInt32LE(36 + pcm.length, 4);
+  head.write('WAVE', 8, 'ascii');
+  head.write('fmt ', 12, 'ascii');
+  head.writeUInt32LE(16, 16);
+  head.writeUInt16LE(1, 20);
+  head.writeUInt16LE(1, 22);
+  head.writeUInt32LE(TTS_SAMPLE_RATE, 24);
+  head.writeUInt32LE(TTS_SAMPLE_RATE * 2, 28);
+  head.writeUInt16LE(2, 32);
+  head.writeUInt16LE(16, 34);
+  head.write('data', 36, 'ascii');
+  head.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([head, Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength)]);
 }
 
 /** The body of `req`, or null when it is longer than `max` bytes or breaks off. */

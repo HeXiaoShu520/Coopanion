@@ -42,7 +42,7 @@ Coopanion is a desktop pet. **Coo** lives on the bottom edge of your screen: it 
 ## Features
 
 - **Many model services**: OpenAI, Anthropic, Gemini, xAI, OpenRouter, DeepSeek, Kimi, Qwen, MiniMax, Zhipu GLM, Doubao, Baidu Qianfan and StepFun with an API key, or a ChatGPT account through its ChatGPT plan.
-- **Chat**: hold the talk key and speak, or type; Coo answers in a bubble. Speech is recognized on your machine with FunASR or Whisper.
+- **Chat**: hold the talk key and speak, or type; Coo answers in a bubble. Speech is recognized on your machine with FunASR or Whisper, or by Doubao's streaming recognizer; answers can be read aloud by Doubao.
 - **Memory**: Coo remembers what you talked about and when you poke it or pat its head. What it knows about you goes in `PARTNER.md` in its workspace, and every change to the workspace is kept as a version (the Windows build carries git; on macOS and Linux git has to be installed).
 - **Computer use**: clicking buttons, typing, switching windows. Coo asks before it acts.
 - **Activity bubbles**: an animated icon shows when Coo is thinking, reading, searching, writing or using the computer.
@@ -82,7 +82,7 @@ Installing does not need administrator rights.
 3. Coopanion lives in the menu bar; it shows in the Dock only while the settings window is open.
 
 > [!NOTE]
-> macOS asks for Microphone (voice input), Input Monitoring (talk key), and Screen & System Audio Recording plus Accessibility (computer use) the first time each is needed. Restart Coopanion after changing the last three. macOS does not carry these grants over to an updated version: if Coopanion says a permission is missing while its switch is on, remove Coopanion from that list with −, add `/Applications/Coopanion.app` back and restart.
+> macOS asks for Microphone (voice), Input Monitoring (talk key), and Screen & System Audio Recording plus Accessibility (computer use) the first time each is needed. Restart Coopanion after changing the last three. macOS does not carry these grants over to an updated version: if Coopanion says a permission is missing while its switch is on, remove Coopanion from that list with −, add `/Applications/Coopanion.app` back and restart.
 
 ### Linux
 
@@ -130,12 +130,14 @@ Each default is the fast, cheap, vision-capable tier of that vendor; change the 
 
 ### Talking and playing
 
-- **Voice**: tap Left Alt, then hold it and speak; releasing ends the sentence. The talk key, microphone and listening mode (hold to talk / press to toggle / always listen) are on the Voice input page. Instead of recognizing speech locally, you can pick an OpenAI-compatible transcription service there; the recording of each sentence then goes to that service.
+- **Voice**: tap Left Alt, then hold it and speak; releasing ends the sentence. The talk key, microphone and listening mode (hold to talk / press to toggle / always listen) are on the Voice page. Speech is recognized on your machine (FunASR or Whisper) by default; there you can also pick Doubao's streaming recognizer or an OpenAI-compatible transcription service, and the recording of each sentence then goes to that service.
+- **Reading aloud**: with Read replies aloud switched on and a Doubao API Key on the Voice page, the answer to a turn asked by voice is spoken; a typed turn is not. Speaking again, clicking a bubble or typing stops it.
+- **Wake word**: the Wake word section of the Voice page takes the words that start Coo listening without the talk key. They are recognized by a model on your machine, with no audio sent anywhere; download that model in the same section first.
 - **Typing**: rest the pointer on Coo and click the bubble button beside it. With **Typing key** on in Habits, pressing that key in any window opens the typing box too (left Ctrl pressed twice by default). You can paste up to 4 images into the typing box.
 - **Bubbles**: Coo's bubble stays up while the pointer is on it; the countdown resumes when the pointer leaves.
 - **Alarms**: ask Coo for one at a local time or after a number of minutes. Daily alarms keep the local clock time across daylight-saving changes, and alarms missed while the app is closed arrive when it next starts.
 - **Touch**: click to poke Coo, move back and forth over its head to pat it, press and drag to pick it up; let go mid-swing to throw it, or over another display to move it there.
-- **Menu**: right-click Coo for pause / resume, settings, typing, voice input, dress up, hide and quit.
+- **Menu**: right-click Coo for pause / resume, settings, typing, voice, dress up, hide and quit.
 
 Coopanion keeps running in the background: closing the settings window does not quit it, and the tray icon (menu bar on Mac) has show pet, start at login, restart and quit.
 
@@ -164,7 +166,7 @@ Click the tray icon, or right-click Coo and click the gear. **Normal mode** show
 | Start | Connect a model, show or hide the pet, interface colors, rerun the guide, pause / resume |
 | Habits | Language, your name and Coo's, usage statistics, walking, how Coo responds to touches, typing key, display sizes, sounds and speech, computer use, OBS overlay |
 | Dress up | Figure, colors and accessories; import or uninstall figure packs |
-| Voice input | Recognizer or transcription service, model download, talk key, microphone, listening mode, speech threshold |
+| Voice | Recognizer or transcription service, Doubao key, model download, talk key, microphone, listening mode, speech threshold, reading replies aloud, wake word |
 | System prompt | Coo's system prompt; the persona is the CONSTITUTION section |
 | Usage & cost | Tokens used and money spent per day |
 | Chat | The current conversation, with the images Coo shows |
@@ -182,10 +184,10 @@ The Model page in advanced mode changes the model and reasoning effort, adds an 
 
 - **Cost**: Coopanion is free. The model service you choose bills you for usage; see the Usage & cost page (built-in prices exist for DeepSeek, OpenAI, Anthropic, Gemini's paid tier and xAI). Signed in with ChatGPT, requests count toward the ChatGPT plan instead and show no cost.
 - **Sent to the model service**: what you say and type, your interactions with Coo, and screenshots during computer use. Only the service you configured receives them.
-- **Kept on your machine**: API keys and the ChatGPT sign-in, memory, conversation history, settings and logs. Speech is recognized locally and only the text is sent, unless a transcription service is chosen on the Voice input page: then the recording of each sentence goes to that service.
+- **Kept on your machine**: API keys and the ChatGPT sign-in, memory, conversation history, settings and logs. Speech is recognized locally and only the text is sent, unless Doubao's recognizer or a transcription service is chosen on the Voice page: then the recording of each sentence goes to that service. With reading aloud on, the text to be read and the made voice travel to Doubao; the wake word is recognized by a model downloaded to your machine.
 - **Local pet service**: browser writes and WebSocket connections require the pet service's own HTTP origin, including its port. The desktop window authenticates with a random credential passed to its host at startup.
 - **Anonymous usage statistics**: sent to `survey.palailab.org`. Only counts, time used, settings and a random install ID; no conversations, screenshots, keys or files. Every field is listed in [docs/TELEMETRY.md](docs/TELEMETRY.md). Turn it off in Habits.
-- **Other network access**: checks for new releases on GitHub (in the background on Windows and with the AppImage, when the settings window opens on Mac and with the deb); npm and the official extension index on GitHub on the Extensions page, and GitHub for votes and comments; ModelScope (or Hugging Face as a fallback) when downloading the speech model.
+- **Other network access**: checks for new releases on GitHub (in the background on Windows and with the AppImage, when the settings window opens on Mac and with the deb); npm and the official extension index on GitHub on the Extensions page, and GitHub for votes and comments; ModelScope (or Hugging Face as a fallback) when downloading the speech model, GitHub when downloading the wake word model, and Volcengine for speech recognized by Doubao or read aloud.
 
 ## Data and uninstalling
 
@@ -220,7 +222,7 @@ Check the status next to the title on the Start page. **Paused**: click resume. 
 
 - The mic button beside Coo must not be crossed out;
 - tap Left Alt first, then press and hold it (two presses too far apart do not count);
-- the Voice input page shows the recognizer as ready (click Download if the model is missing), and its level meter moves while you speak;
+- the Voice page shows the recognizer as ready (click Download if the model is missing), and its level meter moves while you speak; with a wake word, its section shows it listening;
 - Windows: Settings → Privacy & security → Microphone, allow desktop apps;
 - Mac: System Settings → Privacy & Security, turn on Microphone and Input Monitoring for Coopanion, then restart it.
 

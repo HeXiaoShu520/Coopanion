@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -15,6 +15,13 @@ import { FUNASR_MODEL, RuntimeStore, extract, type ModelSpec } from '../src/runt
 function zipOf(dir: string, out: string): void {
   const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
   const r = spawnSync(tar, ['-a', '-cf', out, '-C', dir, '.'], { encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(r.stderr);
+}
+
+/** The same, as the plain tar the wake word model ships in. */
+function tarOf(dir: string, out: string): void {
+  const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+  const r = spawnSync(tar, ['-cf', out, '-C', dir, '.'], { encoding: 'utf8' });
   if (r.status !== 0) throw new Error(r.stderr);
 }
 
@@ -100,6 +107,72 @@ describe('the FunASR model', () => {
       expect(readdirSync(store.funasr.dir).filter((f) => f.endsWith('.partial'))).toEqual([]);
     } finally {
       a.server.close(); b.server.close();
+    }
+  });
+});
+
+describe('the wake word model', () => {
+  const files = {
+    'encoder-epoch-12-avg-2-chunk-16-left-64.onnx': Buffer.from('encoder'),
+    'encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx': Buffer.from('encoder int8'),
+    'decoder-epoch-12-avg-2-chunk-16-left-64.onnx': Buffer.from('decoder'),
+    'joiner-epoch-12-avg-2-chunk-16-left-64.onnx': Buffer.from('joiner'),
+    'tokens.txt': Buffer.from('a b c'),
+  };
+
+  /** A tar like the release's, its files in a directory named after the model. */
+  function archiveOf(modelFiles: Record<string, Buffer>): Buffer {
+    const stage = mkdtempSync(join(tmpdir(), 'pet-kws-'));
+    const inner = join(stage, 'sherpa-onnx-kws');
+    mkdirSync(inner, { recursive: true });
+    for (const [name, body] of Object.entries(modelFiles)) writeFileSync(join(inner, name), body);
+    const archive = join(mkdtempSync(join(tmpdir(), 'pet-kws-arc-')), 'kws.tar');
+    tarOf(stage, archive);
+    return readFileSync(archive);
+  }
+
+  /** The archive's own name, as the World asks for it. */
+  const spec = (url: string) => ({
+    id: 'kws-test',
+    archive: 'kws.tar',
+    files: [
+      { role: 'encoder', name: /^encoder[^/]*\.onnx$/ },
+      { role: 'decoder', name: /^decoder[^/]*\.onnx$/ },
+      { role: 'joiner', name: /^joiner[^/]*\.onnx$/ },
+      { role: 'tokens', name: /^tokens\.txt$/ },
+    ],
+    sources: [(file: string) => `${url}/${file}`],
+  });
+
+  it('unpacks one archive and finds the files by name, the int8 export first', async () => {
+    const a = await fileServer({ 'kws.tar': archiveOf(files) });
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'pet-kwsm-'));
+      const store = new RuntimeStore({ runtimesRoot: () => root, modelsDir: () => root, kwsModel: spec(a.url) });
+      expect(store.kws.state().phase).toBe('absent');
+      await store.kws.install();
+      expect(store.kws.state().phase).toBe('ready');
+      const paths = store.kws.paths();
+      expect(Object.keys(paths).sort()).toEqual(['decoder', 'encoder', 'joiner', 'tokens']);
+      expect(paths.encoder!.endsWith('.int8.onnx')).toBe(true);
+      expect(existsSync(`${store.kws.dir}.partial`)).toBe(false);
+    } finally {
+      a.server.close();
+    }
+  });
+
+  it('is an error and leaves nothing behind when a file is missing from the archive', async () => {
+    const withoutTokens = Object.fromEntries(Object.entries(files).filter(([name]) => name !== 'tokens.txt'));
+    const a = await fileServer({ 'kws.tar': archiveOf(withoutTokens) });
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'pet-kwsm-'));
+      const store = new RuntimeStore({ runtimesRoot: () => root, modelsDir: () => root, kwsModel: spec(a.url) });
+      await store.kws.install();
+      expect(store.kws.state().phase).toBe('error');
+      expect(existsSync(store.kws.dir)).toBe(false);
+      expect(existsSync(`${store.kws.dir}.partial`)).toBe(false);
+    } finally {
+      a.server.close();
     }
   });
 });

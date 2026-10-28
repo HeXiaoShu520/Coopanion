@@ -9,9 +9,9 @@ import { S as ptBR } from './strings.pt-BR.ts';
 import { S as it } from './strings.it.ts';
 import { S as ru } from './strings.ru.ts';
 
-const zh = { nav: '语音输入' };
+const zh = { nav: '语音' };
 
-export const en: typeof zh = { nav: 'Voice input' };
+export const en: typeof zh = { nav: 'Voice' };
 
 export const S = pick({
   zh, en, 'zh-Hant': zhHant, ja, ko, fr, de, 'es-419': es419, 'pt-BR': ptBR, it, ru,

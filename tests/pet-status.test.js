@@ -19,6 +19,8 @@ function page({ host = false, hash = '' } = {}) {
   if (host) win.petHost = {};
   const sockets = [];
   const bodyChanges = [];
+  /** What the page asked of the reader of replies (voice-out.js), which needs an audio context to run. */
+  const voice = [];
   const body = {
     layout: { busy: false, facing: 1, cursor: '', bubble: { x: 500, y: 400 } },
     set: (change) => bodyChanges.push(change), cue() {}, talk() {},
@@ -34,14 +36,21 @@ function page({ host = false, hash = '' } = {}) {
     COO_CSS, mini, normalizeSkin, skinCss,
     createSfx: () => ({ unlock() {}, pop() {}, babble() {}, blub() {}, configure() {}, set() {}, setPan() {}, listenStart() {}, listenEnd() {}, select() {}, tick() {} }),
     createSpeech: () => ({ configure() {}, begin() {}, reveal() { return false; }, stop() {}, active: false }),
+    createVoiceOut: () => ({
+      active: false,
+      reading: null,
+      speak: (id, pieces) => voice.push(['speak', id, pieces]),
+      stop: () => voice.push(['stop']),
+      configure: (opts) => voice.push(['configure', opts]),
+    }),
     textSteps: () => 1,
     loadBody: async () => body, body,
     t, language: () => 'zh', useLanguage: async () => {},
     // the tab's stage (stage.js) is decoration the activity bubble does not depend on
     lightWall() {}, dressFloor() {}, modeButton: () => ({ show() {} }), glowColor: () => null, setGlow() {}, bindAppearance() {}, announcePainted() {},
   };
-  win.eval(`const { applyTheme, clamp, f, ICONS, linked, COO_CSS, mini, normalizeSkin, skinCss, createSfx, createSpeech, textSteps, loadBody, t, language, useLanguage, lightWall, dressFloor, modeButton, glowColor, setGlow, bindAppearance, announcePainted } = window.deps;\n${source}\nbody = window.deps.body; window.page = { onOrder, openInput, closeBubble, step: (dt) => { T += dt; stepDialog(dt); stepLines(); stepStatus(); layout(dt); }, interactive: () => bubble.matches(UI_SELECTOR), lines: () => lines, overUi: (el) => el.matches(UI_SELECTOR), REPLIED_FADE, UNANSWERED_FADE, MAX_LINES };`);
-  return { ...win.page, bubble: win.document.querySelector('#bubble'), bodyChanges, doc: win.document, sockets, win };
+  win.eval(`const { applyTheme, clamp, f, ICONS, linked, COO_CSS, mini, normalizeSkin, skinCss, createSfx, createSpeech, createVoiceOut, textSteps, loadBody, t, language, useLanguage, lightWall, dressFloor, modeButton, glowColor, setGlow, bindAppearance, announcePainted } = window.deps;\n${source}\nbody = window.deps.body; window.page = { onOrder, openInput, closeBubble, step: (dt) => { T += dt; stepDialog(dt); stepLines(); stepStatus(); layout(dt); }, interactive: () => bubble.matches(UI_SELECTOR), lines: () => lines, overUi: (el) => el.matches(UI_SELECTOR), REPLIED_FADE, UNANSWERED_FADE, MAX_LINES };`);
+  return { ...win.page, bubble: win.document.querySelector('#bubble'), bodyChanges, doc: win.document, sockets, voice, win };
 }
 
 describe('pet page connection', () => {
@@ -244,5 +253,23 @@ describe("the person's lines above Coo", () => {
     expect(up(p)).toHaveLength(1);
     p.onOrder({ t: 'listen', phase: 'heard', text: '今天天气怎么样' });
     expect(up(p)).toHaveLength(0);
+  });
+});
+
+describe('replies read aloud', () => {
+  it('pulls the pieces of the bubble the World names, and cuts the sound when told to stop', () => {
+    const p = page();
+    p.onOrder({ t: 'speak', id: 'b7', pieces: 3 });
+    expect(p.voice).toEqual([['speak', 'b7', 3]]);
+    p.onOrder({ t: 'speak-stop' });
+    expect(p.voice).toEqual([['speak', 'b7', 3], ['stop']]);
+  });
+
+  it('stops reading when the sounds are switched off, and follows the World\'s pace and volume', () => {
+    const p = page();
+    p.onOrder({ t: 'prefs', tts: { speed: 1.2, volume: .5 } });
+    expect(p.voice).toEqual([['configure', { speed: 1.2, volume: .5 }]]);
+    p.onOrder({ t: 'prefs', sound: false });
+    expect(p.voice.at(-1)).toEqual(['stop']);
   });
 });

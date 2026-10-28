@@ -1,14 +1,14 @@
 /**
  * Console panels for the desktop pet: `pet` (window, dressing, window runtime) and `voice`
- * (recognition engine, the FunASR or Whisper model download or the transcription service's settings (api-rows.ts),
- * microphone level, recognized lines). Data goes
+ * (recognition engine, the FunASR or Whisper model download, the transcription service's or Doubao's
+ * settings (api-rows.ts), microphone level, recognized lines). Data goes
  * through `ctx.invoke`, the level meter through `ctx.stream('voice')`. Text is the World's table
  * (src/i18n) for the console's language.
  */
 import type { WebUiClientBundle, WebUiPanel, WebUiPanelContext } from 'cortico/web/shared/client-panel.ts';
 import { petText } from '../i18n/index.ts';
 import { captureKey, PRESSES, splitTaps, withTaps } from './key-capture.ts';
-import { apiRows, type ApiState } from './api-rows.ts';
+import { apiRows, doubaoRows, type ApiState, type UrlKeyState } from './api-rows.ts';
 import './style.css';
 
 interface Artifact { phase: 'absent' | 'working' | 'ready' | 'error'; path: string; done: number; total: number | null; detail: string | null }
@@ -28,8 +28,25 @@ interface VoiceState {
   systemSupported: boolean;
   server: { phase: string; url: string; pid: number | null; detail: string | null } | null;
   /** The download of the FunASR or Whisper model: the engine in force's, else the app language's. */
-  model: Artifact & { bytes: number; engine: Exclude<Engine, 'system' | 'api'> };
+  model: Artifact & { bytes: number; engine: Exclude<Engine, 'system' | 'api' | 'doubao'> };
   api: ApiState;
+  /** Doubao's address and whether a key is saved; recognition and synthesis share both. */
+  doubao: UrlKeyState;
+  /** Reading replies aloud: the settings, and why nothing can be read (no Key). */
+  tts: { enabled: boolean; voice: string; speed: number; volume: number; maxChars: number; clean: boolean; problem: string | null };
+  /** The wake word: what may wake the pet, and why it is not hearing. */
+  wake: {
+    enabled: boolean;
+    keywords: string;
+    threshold: number;
+    cooldownMs: number;
+    phase: 'stopped' | 'listening' | 'error';
+    /** Why nothing can wake the pet now. */
+    detail: string | null;
+    /** The words as the keywords file has them, which is what the panel shows. */
+    words: string[];
+    model: Artifact;
+  };
   mic: { state: string; detail: string | null };
   input: {
     mode: MicMode;
@@ -50,9 +67,11 @@ interface VoiceState {
 }
 
 type MicMode = 'hold' | 'toggle' | 'always';
-type Engine = 'funasr' | 'whisper' | 'system' | 'api';
+type Engine = 'funasr' | 'whisper' | 'system' | 'api' | 'doubao';
 
 const MB = (n: number) => `${Math.round(n / 1048576)} MB`;
+/** The voice Doubao's synthesis takes when none is named; a hint in the panel's field. */
+const DEFAULT_VOICE = 'zh_female_vv_uranus_bigtts';
 const progress = (a: Artifact) => (a.total ? `${Math.round((a.done / a.total) * 100)}%` : MB(a.done));
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -145,7 +164,7 @@ const petPanel: WebUiPanel = {
 };
 
 /** The engines with a name of their own; the system recognizer's is in the text table. */
-const ENGINE_NAMES: Partial<Record<Engine, string>> = { funasr: 'FunASR', whisper: 'Whisper' };
+const ENGINE_NAMES: Partial<Record<Engine, string>> = { funasr: 'FunASR', whisper: 'Whisper', doubao: 'Doubao' };
 
 const FLOOR_DB = -60;
 const meterPct = (db: number) => Math.max(0, Math.min(100, ((db - FLOOR_DB) / -FLOOR_DB) * 100));
@@ -189,6 +208,7 @@ const voicePanel: WebUiPanel = {
     const btnInstall = ui.button(t.download, { size: 'sm', variant: 'primary' });
     rt.acts.append(btnInstall);
     const api = apiRows(ctx, t, (name) => statusRow(ctx, name), (patch) => void call('setApi', [patch])());
+    const doubao = doubaoRows(ctx, t, (name) => statusRow(ctx, name), (patch) => void call('setDoubao', [patch])());
 
     const micRow = statusRow(ctx, t.mic);
     const deviceSel = ui.select();
@@ -231,8 +251,81 @@ const voicePanel: WebUiPanel = {
     meterRow.append(meterDot, ui.h('span', 'mname', t.level), meterWrap);
 
     const log = ui.log({ max: 100, empty: t.noResults });
-    settings.append(eng.row, srv.row, rt.row, ...api.rows, micRow.row, keyRow.row, modeRow.row, onPressRow.row, meterRow);
+    settings.append(eng.row, srv.row, rt.row, ...api.rows, ...doubao.rows, micRow.row, keyRow.row, modeRow.row, onPressRow.row, meterRow);
     s.append(master, msg, settings);
+
+    // 「朗读」: the same Key reads the replies that answered words heard through the microphone
+    const read = ui.sheet({ title: t.read, desc: t.readHint });
+    root.appendChild(read.el);
+    const readOn = ui.h('input', 'pet-switch');
+    readOn.type = 'checkbox';
+    readOn.setAttribute('role', 'switch');
+    readOn.addEventListener('change', () => void call('setTts', [{ enabled: readOn.checked }])());
+    const readRow = statusRow(ctx, t.read);
+    readRow.acts.append(readOn);
+    const readBody = ui.h('div', 'pet-voicebody');
+    /** A number the person types: committed on change, so a half-typed value is never saved. */
+    const numberRow = (name: string, hint: string, attrs: { min: number; max: number; step: number }, method = 'setTts') => {
+      const line = statusRow(ctx, name);
+      const field = ui.input({ type: 'number' });
+      field.min = String(attrs.min);
+      field.max = String(attrs.max);
+      field.step = String(attrs.step);
+      field.style.flex = '0 0 6em';
+      field.addEventListener('change', () => {
+        const value = Number(field.value);
+        if (Number.isFinite(value) && st) void call(method, [{ [hint]: value }])();
+      });
+      line.acts.append(field);
+      return { row: line.row, field };
+    };
+    const voiceRow = statusRow(ctx, text.config.ttsVoice.title);
+    const voiceField = ui.input({ placeholder: DEFAULT_VOICE, cls: 'mono' });
+    voiceField.style.flex = '0 1 18em';
+    voiceField.addEventListener('change', () => void call('setTts', [{ voice: voiceField.value }])());
+    voiceRow.acts.append(voiceField);
+    const speed = numberRow(text.config.ttsSpeed.title, 'speed', { min: 0.5, max: 2, step: 0.1 });
+    const volume = numberRow(text.config.ttsVolume.title, 'volume', { min: 0, max: 1, step: 0.05 });
+    const chars = numberRow(text.config.ttsMaxChars.title, 'maxChars', { min: 40, max: 600, step: 10 });
+    // the cleaner drops code blocks, links, emoji and long asides before anything is read
+    const cleanOn = ui.h('input', 'pet-switch');
+    cleanOn.type = 'checkbox';
+    cleanOn.setAttribute('role', 'switch');
+    cleanOn.addEventListener('change', () => void call('setTts', [{ clean: cleanOn.checked }])());
+    const cleanRow = statusRow(ctx, text.config.ttsClean.title);
+    cleanRow.acts.append(cleanOn);
+    const previewRow = statusRow(ctx, t.preview);
+    const btnPreview = ui.button(t.preview, { size: 'sm', variant: 'primary' });
+    previewRow.acts.append(btnPreview);
+    readBody.append(voiceRow.row, speed.row, volume.row, chars.row, cleanRow.row, previewRow.row);
+    const readMsg = ui.msgline('');
+    read.body.append(readRow.row, readBody, readMsg);
+
+    // 「唤醒词」: a word the microphone hears opens listening, so the talk key can be left alone
+    const wake = text.wake;
+    const wakeCard = ui.sheet({ title: wake.group, desc: wake.enabled.description });
+    root.appendChild(wakeCard.el);
+    const wakeOn = ui.h('input', 'pet-switch');
+    wakeOn.type = 'checkbox';
+    wakeOn.setAttribute('role', 'switch');
+    wakeOn.addEventListener('change', () => void call('setWake', [{ enabled: wakeOn.checked }])());
+    const wakeRow = statusRow(ctx, wake.enabled.title);
+    wakeRow.acts.append(wakeOn);
+    const wakeBody = ui.h('div', 'pet-voicebody');
+    // the keywords file as the person writes it: one keyword a line, in the spotter's own syntax
+    const wakeWordsRow = statusRow(ctx, wake.keywords.title);
+    const wakeWords = ui.textarea({ rows: 4, placeholder: wake.hint });
+    wakeWords.spellcheck = false;
+    wakeWords.addEventListener('change', () => void call('setWake', [{ keywords: wakeWords.value }])());
+    const wakeThreshold = numberRow(wake.threshold.title, 'threshold', { min: 0.05, max: 0.9, step: 0.05 }, 'setWake');
+    const wakeCooldown = numberRow(wake.cooldownMs.title, 'cooldownMs', { min: 0, max: 10000, step: 100 }, 'setWake');
+    const wakeModelRow = statusRow(ctx, wake.model);
+    const btnWakeModel = ui.button(t.download, { size: 'sm', variant: 'primary' });
+    wakeModelRow.acts.append(btnWakeModel);
+    wakeBody.append(wakeWordsRow.row, wakeWords, wakeThreshold.row, wakeCooldown.row, wakeModelRow.row);
+    const wakeMsg = ui.msgline('');
+    wakeCard.body.append(wakeRow.row, wakeBody, wakeMsg);
+
     const results = ui.sheet({ title: t.results, desc: t.resultsHint });
     results.body.append(log.el);
     root.appendChild(results.el);
@@ -257,12 +350,13 @@ const voicePanel: WebUiPanel = {
       // Windows' own recognizer exists only there
       if (next.systemSupported) engines.system = t.system;
       engines.api = t.api;
+      engines.doubao = t.doubao;
       if (engineSel.dataset.list !== JSON.stringify(engines)) {
         engineSel.dataset.list = JSON.stringify(engines);
         engineSel.replaceChildren(...(Object.keys(engines) as Engine[]).map((k) => { const o = ui.h('option', null, engines[k] ?? k); o.value = k; return o; }));
       }
       if (document.activeElement !== engineSel) engineSel.value = next.engine;
-      eng.set(ENGINE_NAMES[next.engine] ?? (next.engine === 'api' ? t.apiName : t.system), 'on', { funasr: t.funasrHint, whisper: t.whisperHint, system: t.systemHint, api: t.apiHint }[next.engine]);
+      eng.set(ENGINE_NAMES[next.engine] ?? (next.engine === 'api' ? t.apiName : next.engine === 'doubao' ? t.doubaoName : t.system), 'on', { funasr: t.funasrHint, whisper: t.whisperHint, system: t.systemHint, api: t.apiHint, doubao: t.doubaoHint }[next.engine]);
       const sv = next.server;
       if (!sv) srv.set('—', 'off');
       else if (sv.phase === 'running') srv.set(t.ready, 'on', sv.url);
@@ -280,9 +374,43 @@ const voicePanel: WebUiPanel = {
       btnInstall.disabled = m.phase === 'working';
       btnInstall.hidden = m.phase === 'ready';
       btnInstall.textContent = m.phase === 'error' ? t.retry : t.download;
-      // the system recognizer and the transcription service have no model to download
-      rt.row.style.display = next.engine === 'system' || next.engine === 'api' ? 'none' : '';
+      // the system recognizer, the transcription service and Doubao have no model to download
+      rt.row.style.display = next.engine === 'system' || next.engine === 'api' || next.engine === 'doubao' ? 'none' : '';
       api.render(next.api, next.engine === 'api');
+      doubao.render(next.doubao, next.engine === 'doubao');
+
+      // reading aloud: independent of the recognition switch above, one Key for both
+      const read0 = next.tts;
+      readOn.checked = read0.enabled;
+      readRow.set(read0.enabled ? t.switchOn : t.switchOff, read0.problem ? 'bad' : read0.enabled ? 'on' : 'off', read0.problem ?? t.readHint);
+      readBody.classList.toggle('off', !read0.enabled);
+      if (document.activeElement !== voiceField) voiceField.value = read0.voice;
+      if (document.activeElement !== speed.field) speed.field.value = String(read0.speed);
+      if (document.activeElement !== volume.field) volume.field.value = String(read0.volume);
+      if (document.activeElement !== chars.field) chars.field.value = String(read0.maxChars);
+      cleanOn.checked = read0.clean;
+      btnPreview.disabled = !!read0.problem;
+
+      // the wake word: its own switch, its words, and the model the spotter loads
+      const wk = next.wake;
+      wakeOn.checked = wk.enabled;
+      const words = wk.words.length ? wake.words(wk.words.join('、')) : wake.hint;
+      // the spotter hears the frames the recognizer's microphone sends: with voice input off there are none
+      const hearing = wk.enabled && next.enabled && wk.phase === 'listening';
+      const problem = wk.enabled ? wk.detail : null;
+      wakeRow.set(hearing ? t.switchOn : t.switchOff, problem ? 'bad' : hearing ? 'on' : 'off', problem ?? (!next.enabled ? t.disabledHint : words));
+      wakeBody.classList.toggle('off', !wk.enabled);
+      if (document.activeElement !== wakeWords) wakeWords.value = wk.keywords;
+      if (document.activeElement !== wakeThreshold.field) wakeThreshold.field.value = String(wk.threshold);
+      if (document.activeElement !== wakeCooldown.field) wakeCooldown.field.value = String(wk.cooldownMs);
+      const wm = wk.model;
+      if (wm.phase === 'working') wakeModelRow.set(t.downloading(progress(wm)), 'busy', wm.detail ?? '');
+      else if (wm.phase === 'error') wakeModelRow.set(t.downloadFailed, 'bad', wm.detail ?? '');
+      else if (wm.phase === 'ready') wakeModelRow.set(t.downloaded, 'on', wm.path);
+      else wakeModelRow.set(t.notDownloaded, 'off', '');
+      btnWakeModel.disabled = wm.phase === 'working';
+      btnWakeModel.hidden = wm.phase === 'ready' || wm.phase === 'working';
+      btnWakeModel.textContent = wm.phase === 'error' ? t.retry : t.download;
 
       const mic = next.mic;
       micRow.set(t.micStates[mic.state] ?? mic.state, mic.state === 'on' ? 'on' : mic.state === 'off' ? 'off' : 'bad', mic.detail ?? '');
@@ -331,6 +459,7 @@ const voicePanel: WebUiPanel = {
     engineSel.addEventListener('change', () => void call('setEngine', [engineSel.value])());
     btnStop.addEventListener('click', call('stop'));
     btnInstall.addEventListener('click', call('install'));
+    btnWakeModel.addEventListener('click', call('installWake'));
     modeSel.addEventListener('change', () => void call('setMic', [{ mode: modeSel.value }])());
     deviceSel.addEventListener('change', () => void call('setMic', [{ deviceId: deviceSel.value }])());
     const dbAt = (x: number) => {
@@ -370,6 +499,33 @@ const voicePanel: WebUiPanel = {
     pressSel.addEventListener('change', () => {
       if (st) void call('setMic', [{ hotkey: withTaps(splitTaps(st.input.hotkey).combo, Number(pressSel.value)) }])();
     });
+
+    // try-listen: one short line synthesized whole and played here, without waiting on the pet
+    let sample: HTMLAudioElement | null = null;
+    btnPreview.addEventListener('click', () => {
+      if (btnPreview.disabled || btnPreview.dataset.busy) return;
+      btnPreview.dataset.busy = '1';
+      btnPreview.textContent = t.previewing;
+      readMsg.textContent = '';
+      void (async () => {
+        try {
+          const out = await ctx.invoke<{ audio?: string; error?: string }>('preview', [t.previewSample]);
+          if (!out.audio) { readMsg.textContent = out.error ?? ''; return; }
+          sample?.pause();
+          sample = new Audio(`data:audio/wav;base64,${out.audio}`);
+          sample.playbackRate = st?.tts.speed ?? 1;
+          sample.volume = Math.min(1, Math.max(0, st?.tts.volume ?? 1));
+          await sample.play().catch(() => undefined);
+        } catch (err) {
+          readMsg.textContent = errText(err);
+        } finally {
+          delete btnPreview.dataset.busy;
+          btnPreview.textContent = t.preview;
+          btnPreview.disabled = !!st?.tts.problem;
+        }
+      })();
+    });
+    ctx.own({ dispose: () => sample?.pause() });
 
     // The talk key is a new combination (key-capture.ts); how it is pressed (`*2`) stays as chosen beside it.
     let capture: { stop(): void } | null = null;
