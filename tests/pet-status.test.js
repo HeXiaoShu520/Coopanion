@@ -323,4 +323,33 @@ describe('the voice as light on the body', () => {
     frames(p, 1);
     expect(p.halo.at(-1)).toEqual([0, 0]);
   });
+
+  it('answers a tapped talk key with one breath of light before the words come', () => {
+    const p = page();
+    p.onOrder({ t: 'listen', phase: 'ready' });
+    p.stepHalo(.05);
+    expect(p.halo.at(-1)[0]).toBeGreaterThan(0);
+    expect(p.halo.at(-1)[2]).toEqual(colour(p, '--skin-eye'));
+    frames(p, 2);
+    expect(p.halo.at(-1)).toEqual([0, 7]);
+  });
+
+  it('lights the body while it works out an answer to a spoken question, and not to a typed one', () => {
+    const spoken = page();
+    spoken.onOrder({ t: 'listen', phase: 'start' });
+    spoken.onOrder({ t: 'listen', phase: 'heard', text: '今天天气怎么样' });
+    show(spoken, think);
+    frames(spoken, .5);
+    expect(spoken.halo.at(-1)[0]).toBeGreaterThan(0);
+    // the next turn comes from the chat page: the light stops with it
+    spoken.onOrder({ t: 'said', via: 'chat', text: '再说说', images: 0, cursor: 1 });
+    frames(spoken, 2);
+    expect(spoken.halo.at(-1)).toEqual([0, 7]);
+
+    const typed = page();
+    typed.onOrder({ t: 'said', via: 'chat', text: '写首诗', images: 0, cursor: 1 });
+    show(typed, think);
+    frames(typed, 1);
+    expect(typed.halo.at(-1)).toEqual([0, 7]);
+  });
 });

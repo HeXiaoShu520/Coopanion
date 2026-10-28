@@ -25,9 +25,10 @@ function samplesOf(ctx, bytes) {
 
 /**
  * `onDone(id)` runs when the last piece of a bubble has finished playing — the World marks the turn
- * as no longer reading. `onFail(id)` runs when a piece could not be made at all.
+ * as no longer reading. `onFail(id)` runs when a piece could not be made at all. `onPiece(id)` runs as
+ * each later piece arrives, so the page can start its breath over with the sentence being read.
  */
-export function createVoiceOut({ onDone, onFail } = {}) {
+export function createVoiceOut({ onDone, onFail, onPiece } = {}) {
   let ctx = null;
   let gain = null;
   /** When the next chunk is to start, on the audio clock; 0 when nothing is scheduled. */
@@ -92,6 +93,8 @@ export function createVoiceOut({ onDone, onFail } = {}) {
     // the answer to this request is what the next piece needs; a failure ends the reply, not the page
     let next = fetch(`/api/tts/audio?id=${encodeURIComponent(id)}&i=0`, { signal: controller.signal });
     for (let i = 0; i < pieces; i++) {
+      // the sentence after the first: the light on the body starts its breath over here
+      if (i) onPiece?.(id);
       let response;
       try {
         response = await next;

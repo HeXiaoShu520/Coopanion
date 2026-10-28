@@ -1691,6 +1691,8 @@ export class DesktopPetWorld implements World {
 
   private onAudio(frame: Int16Array): void {
     if (!this.cfg.asr.enabled || !this.micWanted()) return;
+    // the wake word's window was the only thing holding the gate open, and it has just closed
+    if (this.woke && !this.wakeOpen() && !this.gateOpen()) this.missedWake();
     // the wake word hears every frame, gate or no gate: hearing it is what opens the gate
     const woke = this.wake?.feed(frame) ?? null;
     if (woke) this.onWake(woke);
@@ -1788,6 +1790,20 @@ export class DesktopPetWorld implements World {
     this.woke = false;
     this.wakeUntil = 0;
     this.segmenter.configure(this.segmentConfig());
+  }
+
+  /**
+   * The wake word's window closed with no key and no listening mode to go on: a sentence it caught
+   * before the window ran out is sent, and a listening that heard nothing ends, bubble and light with it.
+   */
+  private missedWake(): void {
+    const open = this.listenOpen;
+    const tail = this.segmenter.flush();
+    this.endWake();
+    if (tail) { this.enqueue(tail); return; }
+    if (!open) return;
+    this.listenOpen = false;
+    this.server.sendPet({ t: 'listen', phase: 'none' });
   }
 
   /** The spotter is hearing, so the microphone has to stay open for it. */

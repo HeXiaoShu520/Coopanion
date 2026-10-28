@@ -85,6 +85,8 @@ const speech = createSpeech(sfx, { onUnit: () => body?.talk() });
 const voiceOut = createVoiceOut({
   onDone: (id) => send({ t: 'spoke', id }),
   onFail: (id) => { voiceGlow.fault(); send({ t: 'spoke', id }); },
+  // every sentence of a reply starts its own breath of light
+  onPiece: () => voiceGlow.beat(),
 });
 
 /* ---------- the voice as light on the body ---------- */
@@ -100,6 +102,8 @@ function tint(name, fallback) {
 }
 /** Listening, thinking and reading aloud: Coo's body lights in its own colour (voice-glow.js); the words stay in the bubbles. */
 const voiceGlow = createVoiceGlow({ rgb: () => tint('--skin-eye', [0, 168, 112]), fault: () => tint('--anger', [229, 72, 77]) });
+/** Whether the turn in hand was asked by voice: working it out lights the body then, and not for a typed turn. */
+let voiceTurn = false;
 if (host) sfx.unlock();
 else ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, () => sfx.unlock(), { capture: true }));
 
@@ -363,7 +367,7 @@ function onOrder(m) {
     case 'act': acts.push(...m.actions); holdRoam(20); break;
     case 'listen': onListen(m); break;
     // a message sent from the chat page, once the bot has it, and one taken back before delivery
-    case 'said': if (prefs.saidBubbles) addLine('chat', typeof m.text === 'string' ? m.text : '', false, { images: Number(m.images) || 0, cursor: m.cursor ?? null }); break;
+    case 'said': voiceTurn = false; if (prefs.saidBubbles) addLine('chat', typeof m.text === 'string' ? m.text : '', false, { images: Number(m.images) || 0, cursor: m.cursor ?? null }); break;
     case 'said-withdrawn': withdrawLine(m.cursor); break;
     case 'status': setStatus(m.status); break;
     case 'dialog': queue.push({ kind: 'dialog', id: m.id, d: m }); holdRoam(20); break;
@@ -960,6 +964,8 @@ function openInput() {
     e.preventDefault();
     const v = input.value.trim();
     if (it.pending || (!v && !it.images.length)) return;
+    // a typed turn is not part of the voice's light
+    voiceTurn = false;
     send({ t: 'text', text: v, ...(it.images.length ? { images: it.images.map(({ mime, base64, name }) => ({ mime, base64, name })) } : {}) });
     sfx.select(); body?.cue('cheer');
     closeBubble();
@@ -978,6 +984,8 @@ function onListen(m) {
     if (listen.phase) return;
     sfx.tick();
     body?.cue('perk');
+    // the tap is answered before the words come: one breath of light, then the holding takes over
+    voiceGlow.cue();
     return;
   }
   if (m.phase === 'start') {
@@ -995,6 +1003,7 @@ function onListen(m) {
   } else if (m.phase === 'heard') {
     const line = listen.line ?? addLine('voice', '', true);
     endListen();
+    voiceTurn = true;
     settleLine(line, m.text || '');
     if (!prefs.saidBubbles) fadeLine(line);
     sfx.listenEnd();
@@ -1811,7 +1820,7 @@ function stepBackdrop(dt) {
   backdrop.k = k < .005 ? 0 : k;
   // the body is in its own frame: it takes the halo as a CSS filter. A photo-like backdrop asks for the
   // sampled halo; the voice asks for its own light, in Coo's colour, which outshines it while it lasts (voice-glow.js)
-  const light = prefs.glow > 0 ? voiceGlow.next(dt, { listening: bodyState.listening, speaking: voiceOut.active, thinking: bodyState.thinking }) : null;
+  const light = prefs.glow > 0 ? voiceGlow.next(dt, { listening: bodyState.listening, speaking: voiceOut.active, thinking: bodyState.thinking && voiceTurn }) : null;
   if (light) body?.setHalo(Math.max(light.k, backdrop.k * HALO_STRENGTH), Math.max(light.reach, prefs.glow), light.rgb);
   else body?.setHalo(backdrop.k * HALO_STRENGTH, prefs.glow);
 }

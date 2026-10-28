@@ -43,6 +43,22 @@ describe('the voice as light on the body', () => {
     expect(spread(run(createVoiceGlow(), 2.2, { speaking: true }))).toBeGreaterThan(spread(run(createVoiceGlow(), 2.2, { thinking: true })) * 1.5);
   });
 
+  it('answers a tapped talk key with one breath of light, then goes out', () => {
+    const glow = createVoiceGlow();
+    glow.cue();
+    const pulse = run(glow, .6, {}).filter(Boolean);
+    expect(Math.max(...pulse.map((f) => f.k))).toBeGreaterThan(.3);
+    expect(run(glow, 1.5, {}).at(-1)).toBeNull();
+  });
+
+  it('starts the breath over with each sentence read, instead of carrying the last one on', () => {
+    const glow = createVoiceGlow();
+    run(glow, .3, { speaking: true });
+    const high = glow.next(DT, { speaking: true }).k;
+    glow.beat();
+    expect(glow.next(DT, { speaking: true }).k).toBeLessThan(high);
+  });
+
   it('turns red when a sentence is lost, stays red for a moment and clears itself while the voice goes on', () => {
     const glow = createVoiceGlow({ rgb: () => GREEN, fault: () => RED });
     run(glow, .5, { listening: true });
