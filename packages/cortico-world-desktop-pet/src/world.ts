@@ -395,6 +395,8 @@ export class DesktopPetWorld implements World {
   private transcribing = false;
   private packTimer: NodeJS.Timeout | null = null;
   private wasSpeaking = false;
+  /** Whether a held talk key has heard anything at all: let go over silence, the listening it opened ends. */
+  private talkHeard = false;
   private screen: { w: number; h: number } | null = null;
   /** The pet window said it is hidden (its menu's or the tray's 「隐藏」); reset when a page connects. */
   private petHidden = false;
@@ -1625,16 +1627,23 @@ export class DesktopPetWorld implements World {
     if (!on) this.releaseMicSoon();
     if (!this.cfg.asr.enabled || !this.micWanted()) return;
     if (on) {
+      this.talkHeard = false;
       this.listenOpen = true;
       // the microphone opens only now: the first frame that reaches the World starts the listening (onAudio)
       if (this.micOnPress()) this.setMicHeld(true);
-      else this.server.sendPet({ t: 'listen', phase: 'start' });
+      this.server.sendPet({ t: 'listen', phase: 'start' });
       return;
     }
+    const spoke = this.talkHeard;
     const tail = this.segmenter.flush();
     if (tail) this.enqueue(tail);
     this.wasSpeaking = false;
     this.schedulePack();
+    // let go without a word: what the key opened ends, bubble and light with it
+    if (!spoke && !tail && this.listenOpen && !this.wakeOpen()) {
+      this.listenOpen = false;
+      this.server.sendPet({ t: 'listen', phase: 'none' });
+    }
   }
 
   /**
@@ -1707,11 +1716,12 @@ export class DesktopPetWorld implements World {
     }
     this.wasSpeaking = speaking;
     const now = Date.now();
+    if (speaking && this.talking) this.talkHeard = true;
     if (now - this.lastLevelAt >= 100) {
       this.lastLevelAt = now;
       this.voiceFrame({ type: 'level', level: this.level, speaking, open });
-      // the light on the body follows the person's voice while it is being heard
-      if (open) this.server.sendPet({ t: 'level', level: this.level });
+      // the pet page lights the body from the same reading, and tells the person's words from the room
+      if (open) this.server.sendPet({ t: 'level', level: this.level, speaking });
     }
     if (open) this.schedulePack();
   }

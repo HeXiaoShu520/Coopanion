@@ -1,8 +1,9 @@
 /**
- * The voice as light on Coo's body: a glow in its own colour that breathes while the microphone is open,
- * while the answer is worked out and while it is read out, one pulse for a tapped talk key, and red for a
- * moment when a sentence is lost. What was heard or said is still the bubbles' business (`pet-app.js`
- * lines); this answers "is it listening?" to someone who is not reading them.
+ * The voice as light on Coo's body: a glow in its own colour that waits while the microphone is open,
+ * comes up when the person speaks, breathes while the answer is worked out and read out, one pulse for
+ * a tapped talk key, and red for a moment when a sentence is lost. What was heard or said is still the
+ * bubbles' business (`pet-app.js` lines); this answers "is it listening?" to someone who is not reading
+ * them, and "is what it hears me or the room?" to someone who is.
  *
  * The light takes the form the body already has for its halo (`body-host.js` setHalo): a coloured drop
  * shadow of the figure, so it follows the silhouette instead of boxing it in.
@@ -11,8 +12,12 @@
 /**
  * One phase's pulse: its period in seconds, the share of light it swings by and starts from, how far the
  * light reaches in pixels, and what the person's own voice adds while it is heard.
+ *
+ * `wait` is the microphone open with nothing said yet: dim and slow, so an open microphone reads as
+ * "I am here" instead of claiming words that have not come.
  */
 const PHASES = {
+  wait: { period: 3.4, base: .10, swing: .07, voice: 0, reach: 5, reachSwing: 1, reachVoice: 0 },
   listen: { period: 1.15, base: .34, swing: .30, voice: .34, reach: 8, reachSwing: 3, reachVoice: 5 },
   think: { period: 2.2, base: .22, swing: .16, voice: 0, reach: 6, reachSwing: 2, reachVoice: 0 },
   speak: { period: .62, base: .34, swing: .30, voice: 0, reach: 8, reachSwing: 2, reachVoice: 0 },
@@ -60,8 +65,9 @@ export function createVoiceGlow({ rgb = () => [0, 168, 112], fault = () => [229,
     },
     /**
      * The halo to draw this frame — `{ k, reach, rgb }` — or null when the voice is doing nothing.
-     * `state` is the page's `{ listening, speaking, thinking }`: the first that holds lights the body,
-     * an answer being read out loud before the work still going on behind it.
+     * `state` is the page's `{ listening, hearing, speaking, thinking }`: the microphone is open, words
+     * are being heard, a reply is being read out, an answer is being worked out. The first that holds
+     * wins, an answer being read out before the work still going on behind it.
      */
     next(dt, state = {}) {
       const step = Number.isFinite(dt) && dt > 0 ? dt : 0;
@@ -69,9 +75,10 @@ export function createVoiceGlow({ rgb = () => [0, 168, 112], fault = () => [229,
       const now = t < faultUntil ? 'error'
         : t < cueUntil ? 'cue'
           : state.speaking ? 'speak'
-            : state.listening ? 'listen'
+            : state.hearing ? 'listen'
               : state.thinking ? 'think'
-                : null;
+                : state.listening ? 'wait'
+                  : null;
       if (now !== phase) { phase = now; since = t; }
       env += ((phase ? 1 : 0) - env) * Math.min(1, step / (phase === 'cue' ? CUE_FADE : FADE));
       if (!phase && env < .02) { env = 0; return null; }

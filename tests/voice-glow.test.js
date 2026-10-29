@@ -10,7 +10,7 @@ describe('the voice as light on the body', () => {
   it('is out while the voice does nothing, comes up when it starts and goes out when it stops', () => {
     const glow = createVoiceGlow();
     expect(glow.next(DT, {})).toBeNull();
-    const lit = run(glow, 1, { listening: true });
+    const lit = run(glow, 1, { hearing: true });
     // it starts at the foot of its pulse instead of with a flash
     expect(lit[0].k).toBeLessThan(lit.at(-1).k);
     expect(lit.at(-1).k).toBeGreaterThan(.3);
@@ -19,11 +19,22 @@ describe('the voice as light on the body', () => {
     expect(after.at(-1)).toBeNull();
   });
 
+  it('waits dim while the microphone is open and nothing is said, and comes up with the first word', () => {
+    const glow = createVoiceGlow();
+    glow.level(-20);
+    const waiting = run(glow, 2, { listening: true });
+    // an open microphone is not yet a voice: the light stays below the height it holds while hearing
+    expect(waiting.at(-1).k).toBeGreaterThan(0);
+    expect(waiting.at(-1).k).toBeLessThan(.2);
+    const spoken = run(glow, 1, { listening: true, hearing: true });
+    expect(spoken.at(-1).k).toBeGreaterThan(waiting.at(-1).k * 2);
+  });
+
   it('follows the person\'s voice: the louder they are, the brighter the light', () => {
     const quiet = createVoiceGlow(), loud = createVoiceGlow();
     quiet.level(-50); loud.level(-14);
     for (let i = 0; i < 60; i++) {
-      const a = quiet.next(DT, { listening: true }), b = loud.next(DT, { listening: true });
+      const a = quiet.next(DT, { hearing: true }), b = loud.next(DT, { hearing: true });
       expect(b.k).toBeGreaterThan(a.k);
       expect(b.reach).toBeGreaterThan(a.reach);
     }
@@ -34,7 +45,7 @@ describe('the voice as light on the body', () => {
     for (const glow of [speak, speakAndListen, listen]) glow.level(-12);
     const reading = run(speak, 1.5, { speaking: true });
     expect(run(speakAndListen, 1.5, { speaking: true, listening: true, thinking: true }).map((f) => f.k)).toEqual(reading.map((f) => f.k));
-    expect(run(listen, 1.5, { listening: true }).map((f) => f.k)).not.toEqual(reading.map((f) => f.k));
+    expect(run(listen, 1.5, { hearing: true }).map((f) => f.k)).not.toEqual(reading.map((f) => f.k));
   });
 
   it('pulses faster while reading out than while thinking', () => {
@@ -61,10 +72,10 @@ describe('the voice as light on the body', () => {
 
   it('turns red when a sentence is lost, stays red for a moment and clears itself while the voice goes on', () => {
     const glow = createVoiceGlow({ rgb: () => GREEN, fault: () => RED });
-    run(glow, .5, { listening: true });
+    run(glow, .5, { hearing: true });
     glow.fault();
-    const red = run(glow, 1, { listening: true });
+    const red = run(glow, 1, { hearing: true });
     expect(red.every((f) => f.rgb === RED)).toBe(true);
-    expect(run(glow, 2, { listening: true }).at(-1).rgb).toBe(GREEN);
+    expect(run(glow, 2, { hearing: true }).at(-1).rgb).toBe(GREEN);
   });
 });

@@ -290,7 +290,7 @@ describe('the voice as light on the body', () => {
     p.stepHalo(.05);
     expect(p.halo.at(-1)).toEqual([0, 7]);
     p.onOrder({ t: 'listen', phase: 'start' });
-    p.onOrder({ t: 'level', level: -20 });
+    p.onOrder({ t: 'level', level: -20, speaking: true });
     frames(p, 1);
     const [k, reach, rgb] = p.halo.at(-1);
     expect(rgb).toEqual(colour(p, '--skin-eye'));
@@ -299,6 +299,18 @@ describe('the voice as light on the body', () => {
     p.onOrder({ t: 'listen', phase: 'heard', text: '在吗' });
     frames(p, 3);
     expect(p.halo.at(-1)).toEqual([0, 7]);
+  });
+
+  it('waits dim while the microphone is open and comes up with the first word', () => {
+    const p = page();
+    p.onOrder({ t: 'listen', phase: 'start' });
+    frames(p, 2);
+    const waiting = p.halo.at(-1)[0];
+    expect(waiting).toBeGreaterThan(0);
+    expect(waiting).toBeLessThan(.25);
+    p.onOrder({ t: 'level', level: -20, speaking: true });
+    frames(p, 1);
+    expect(p.halo.at(-1)[0]).toBeGreaterThan(waiting * 2);
   });
 
   it('turns the light red for a moment when a sentence is lost, then goes out', () => {

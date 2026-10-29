@@ -104,6 +104,8 @@ function tint(name, fallback) {
 const voiceGlow = createVoiceGlow({ rgb: () => tint('--skin-eye', [0, 168, 112]), fault: () => tint('--anger', [229, 72, 77]) });
 /** Whether the turn in hand was asked by voice: working it out lights the body then, and not for a typed turn. */
 let voiceTurn = false;
+/** Whether, as of the last reading, the microphone has the person's voice in it and not just an open room. */
+let hearing = false;
 if (host) sfx.unlock();
 else ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, () => sfx.unlock(), { capture: true }));
 
@@ -354,8 +356,9 @@ function onOrder(m) {
     // the same bubble's words, read aloud: pulled piece by piece from the World while they type
     case 'speak': voiceOut.speak(m.id, m.pieces); break;
     case 'speak-stop': voiceOut.stop(); break;
-    // how loud the person is, while the microphone is open: the light on the body follows it
-    case 'level': voiceGlow.level(m.level); break;
+    // how loud the person is, while the microphone is open, and whether that is their voice or the room:
+    // the light waits while it is only the room and comes up when it is them
+    case 'level': voiceGlow.level(m.level); hearing = !!m.speaking; break;
     // a sentence of the reply was lost in transit: the light shows it
     case 'dropped': voiceGlow.fault(); break;
     case 'ask': dropAsks(); queue.push({ kind: 'ask', id: m.id, question: m.question, options: m.options || [], own: m.own !== false }); holdRoam(20); break;
@@ -1015,6 +1018,7 @@ function onListen(m) {
 }
 function endListen() {
   listen.phase = null; listen.line = null; listen.text = ''; listen.interim = '';
+  hearing = false;
   setBody({ listening: false });
 }
 /**
@@ -1820,7 +1824,12 @@ function stepBackdrop(dt) {
   backdrop.k = k < .005 ? 0 : k;
   // the body is in its own frame: it takes the halo as a CSS filter. A photo-like backdrop asks for the
   // sampled halo; the voice asks for its own light, in Coo's colour, which outshines it while it lasts (voice-glow.js)
-  const light = prefs.glow > 0 ? voiceGlow.next(dt, { listening: bodyState.listening, speaking: voiceOut.active, thinking: bodyState.thinking && voiceTurn }) : null;
+  const light = prefs.glow > 0 ? voiceGlow.next(dt, {
+    listening: bodyState.listening,
+    hearing: bodyState.listening && hearing,
+    speaking: voiceOut.active,
+    thinking: bodyState.thinking && voiceTurn,
+  }) : null;
   if (light) body?.setHalo(Math.max(light.k, backdrop.k * HALO_STRENGTH), Math.max(light.reach, prefs.glow), light.rgb);
   else body?.setHalo(backdrop.k * HALO_STRENGTH, prefs.glow);
 }
