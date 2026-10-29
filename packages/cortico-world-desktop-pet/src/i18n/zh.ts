@@ -123,10 +123,10 @@ export default {
     unknownTokens: (what: string) => `模型的词表里没有：${what}。请按拼音填写，声母和韵母用空格隔开`,
     notListening: '唤醒词没有在听',
     paused: '唤醒词接连出错，先歇一会儿',
-    /** 面板与配置里这一节的标题、开关、词表、灵敏度和间隔 */
+    /** 配置页这一节的标题、面板里叫名字那一行与它的开关，以及收在“更多设置”里的词表与调参 */
     group: '唤醒词',
     enabled: {
-      title: '唤醒词',
+      title: '叫名字就能叫醒它',
       description: '开着时，麦克风里出现这个词就让 Coo 开始听，不必按说话键；在本机识别，录音不上传',
     },
     keywords: {
@@ -370,7 +370,10 @@ export default {
     noBuild: '本平台没有预编译包',
     electronSize: 'Electron 44.4.4，约 150 MB',
 
-    voice: '语音输入',
+    voice: '语音',
+    voiceHint: '怎么叫醒它、用哪个麦克风听、识别用哪个引擎，都在这张卡里',
+    more: '更多设置',
+    less: '收起设置',
     enable: '开启语音输入',
     enabledHint: '麦克风保持开启，按收音方式发送给 Coo',
     enabledHintOnPress: '按住说话键时打开麦克风，松开后关闭',

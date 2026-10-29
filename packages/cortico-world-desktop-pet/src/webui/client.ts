@@ -177,7 +177,7 @@ const voicePanel: WebUiPanel = {
     const { ui, root } = ctx;
     const text = petText(ctx.language);
     const t = text.panel;
-    const card = ui.sheet({ title: t.voice });
+    const card = ui.sheet({ title: t.voice, desc: t.voiceHint });
     root.appendChild(card.el);
     const s = card.body;
     const msg = ui.msgline('');
@@ -193,7 +193,9 @@ const voicePanel: WebUiPanel = {
     enabled.setAttribute('role', 'switch');
     enabled.addEventListener('change', () => void call('setEnabled', [enabled.checked])());
     master.append(masterText, enabled);
+    // the rows that answer how a sentence starts, in that order; what an engine needs is behind 更多设置
     const settings = ui.h('div', 'pet-voicebody');
+    const more = ui.h('div', 'pet-voicebody');
 
     const eng = statusRow(ctx, t.engine);
     const engineSel = ui.select();
@@ -251,7 +253,6 @@ const voicePanel: WebUiPanel = {
     meterRow.append(meterDot, ui.h('span', 'mname', t.level), meterWrap);
 
     const log = ui.log({ max: 100, empty: t.noResults });
-    settings.append(eng.row, srv.row, rt.row, ...api.rows, ...doubao.rows, micRow.row, keyRow.row, modeRow.row, onPressRow.row, meterRow);
     s.append(master, msg, settings);
 
     // 「朗读」: the same Key reads the replies that answered words heard through the microphone
@@ -301,18 +302,18 @@ const voicePanel: WebUiPanel = {
     const readMsg = ui.msgline('');
     read.body.append(readRow.row, readBody, readMsg);
 
-    // 「唤醒词」: a word the microphone hears opens listening, so the talk key can be left alone
+    // 「叫名字」: the same microphone, opened by a word instead of the key. The two are the two ways
+    // a sentence starts, so its row sits beside the talk key rather than in a card of its own.
     const wake = text.wake;
-    const wakeCard = ui.sheet({ title: wake.group, desc: wake.enabled.description });
-    root.appendChild(wakeCard.el);
     const wakeOn = ui.h('input', 'pet-switch');
     wakeOn.type = 'checkbox';
     wakeOn.setAttribute('role', 'switch');
     wakeOn.addEventListener('change', () => void call('setWake', [{ enabled: wakeOn.checked }])());
     const wakeRow = statusRow(ctx, wake.enabled.title);
-    wakeRow.acts.append(wakeOn);
-    const wakeBody = ui.h('div', 'pet-voicebody');
-    // the keywords file as the person writes it: one keyword a line, in the spotter's own syntax
+    // the model is what makes this row work at all, so its download sits here and not behind 更多设置
+    const btnWakeModel = ui.button(t.download, { size: 'sm', variant: 'primary' });
+    wakeRow.acts.append(btnWakeModel, wakeOn);
+    // the words are the model's own tokens, which the hint beside the box says; the rest is tuning
     const wakeWordsRow = statusRow(ctx, wake.keywords.title);
     const wakeWords = ui.textarea({ rows: 4, placeholder: wake.hint });
     wakeWords.spellcheck = false;
@@ -320,11 +321,18 @@ const voicePanel: WebUiPanel = {
     const wakeThreshold = numberRow(wake.threshold.title, 'threshold', { min: 0.05, max: 0.9, step: 0.05 }, 'setWake');
     const wakeCooldown = numberRow(wake.cooldownMs.title, 'cooldownMs', { min: 0, max: 10000, step: 100 }, 'setWake');
     const wakeModelRow = statusRow(ctx, wake.model);
-    const btnWakeModel = ui.button(t.download, { size: 'sm', variant: 'primary' });
-    wakeModelRow.acts.append(btnWakeModel);
-    wakeBody.append(wakeWordsRow.row, wakeWords, wakeThreshold.row, wakeCooldown.row, wakeModelRow.row);
-    const wakeMsg = ui.msgline('');
-    wakeCard.body.append(wakeRow.row, wakeBody, wakeMsg);
+
+    settings.append(keyRow.row, modeRow.row, wakeRow.row, micRow.row, meterRow);
+    more.append(eng.row, srv.row, rt.row, ...api.rows, ...doubao.rows, onPressRow.row, wakeWordsRow.row, wakeWords, wakeThreshold.row, wakeCooldown.row, wakeModelRow.row);
+    more.hidden = true;
+    const moreBtn = ui.button(t.more, { size: 'sm' });
+    const moreWrap = ui.h('div', 'pet-morebtn');
+    moreWrap.append(moreBtn);
+    moreBtn.addEventListener('click', () => {
+      more.hidden = !more.hidden;
+      moreBtn.textContent = more.hidden ? t.more : t.less;
+    });
+    s.append(moreWrap, more);
 
     const results = ui.sheet({ title: t.results, desc: t.resultsHint });
     results.body.append(log.el);
@@ -346,6 +354,7 @@ const voicePanel: WebUiPanel = {
       const onPressOn = next.input.mode === 'hold' && next.input.openOnPress;
       masterHint.textContent = !next.enabled ? t.disabledHint : onPressOn ? t.enabledHintOnPress : t.enabledHint;
       settings.classList.toggle('off', !next.enabled);
+      more.classList.toggle('off', !next.enabled);
       const engines: Partial<Record<Engine, string>> = { funasr: t.funasr, whisper: t.whisper };
       // Windows' own recognizer exists only there
       if (next.systemSupported) engines.system = t.system;
@@ -399,7 +408,6 @@ const voicePanel: WebUiPanel = {
       const hearing = wk.enabled && next.enabled && wk.phase === 'listening';
       const problem = wk.enabled ? wk.detail : null;
       wakeRow.set(hearing ? t.switchOn : t.switchOff, problem ? 'bad' : hearing ? 'on' : 'off', problem ?? (!next.enabled ? t.disabledHint : words));
-      wakeBody.classList.toggle('off', !wk.enabled);
       if (document.activeElement !== wakeWords) wakeWords.value = wk.keywords;
       if (document.activeElement !== wakeThreshold.field) wakeThreshold.field.value = String(wk.threshold);
       if (document.activeElement !== wakeCooldown.field) wakeCooldown.field.value = String(wk.cooldownMs);

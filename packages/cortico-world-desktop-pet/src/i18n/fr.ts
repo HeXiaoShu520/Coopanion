@@ -109,7 +109,7 @@ const fr: Translation<PetText> = {
     paused: 'Le mot d’éveil a échoué plusieurs fois et se repose un moment',
     group: 'Mot d’éveil',
     enabled: {
-      title: 'Mot d’éveil',
+      title: 'Réveiller par son nom',
       description: 'Activé, entendre le mot dans le micro fait écouter Coo sans la touche de parole ; la reconnaissance se fait ici et aucun son n’est envoyé',
     },
     keywords: {
@@ -341,7 +341,10 @@ const fr: Translation<PetText> = {
     noBuild: 'Aucun paquet précompilé pour cette plateforme',
     electronSize: 'Electron 44.4.4, environ 150 Mo',
 
-    voice: 'Saisie vocale',
+    voice: 'Voix',
+    voiceHint: 'Comment il est réveillé, quel micro vous entend et quel moteur lit les mots',
+    more: 'Plus de réglages',
+    less: 'Moins de réglages',
     enable: 'Activer la saisie vocale',
     enabledHint: "Le micro reste ouvert ; ce que vous dites va à Coo selon le mode d'écoute",
     enabledHintOnPress: "Le micro s'ouvre tant que la touche de parole est maintenue et se ferme au relâchement",

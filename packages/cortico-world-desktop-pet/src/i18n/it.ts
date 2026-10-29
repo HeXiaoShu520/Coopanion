@@ -109,7 +109,7 @@ const it: Translation<PetText> = {
     paused: 'La parola di attivazione ha fallito più volte e si riposa un momento',
     group: 'Parola di attivazione',
     enabled: {
-      title: 'Parola di attivazione',
+      title: 'Sveglialo con il nome',
       description: 'Attivo, sentire la parola nel microfono fa iniziare ad ascoltare Coo senza il tasto di parola; il riconoscimento avviene qui e nessun audio viene inviato',
     },
     keywords: {
@@ -341,7 +341,10 @@ const it: Translation<PetText> = {
     noBuild: 'Nessun pacchetto precompilato per questa piattaforma',
     electronSize: 'Electron 44.4.4, circa 150 MB',
 
-    voice: 'Input vocale',
+    voice: 'Voce',
+    voiceHint: 'Come si sveglia, quale microfono ti ascolta e quale motore legge le parole',
+    more: 'Altre impostazioni',
+    less: 'Meno impostazioni',
     enable: "Attiva l'input vocale",
     enabledHint: 'Il microfono resta aperto; ciò che dici arriva a Coo secondo la modalità di ascolto',
     enabledHintOnPress: 'Il microfono si apre mentre tieni premuto il tasto per parlare e si chiude quando lo rilasci',

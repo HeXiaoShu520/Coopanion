@@ -128,7 +128,7 @@ const en: PetText = {
     paused: 'The wake word kept failing, so it is resting for a while',
     group: 'Wake word',
     enabled: {
-      title: 'Wake word',
+      title: 'Wake it by name',
       description: 'On, and hearing the word in the microphone starts Coo listening without the talk key; heard here, with no audio sent anywhere',
     },
     keywords: {
@@ -372,7 +372,10 @@ const en: PetText = {
     noBuild: 'No prebuilt package for this platform',
     electronSize: 'Electron 44.4.4, about 150 MB',
 
-    voice: 'Voice input',
+    voice: 'Voice',
+    voiceHint: 'How it is called, which microphone hears you, and which engine reads the words',
+    more: 'More settings',
+    less: 'Fewer settings',
     enable: 'Turn on voice input',
     enabledHint: 'The microphone stays open; speech goes to Coo by the listening mode',
     enabledHintOnPress: 'The microphone opens while the talk key is held and closes after release',

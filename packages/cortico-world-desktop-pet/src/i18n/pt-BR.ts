@@ -109,7 +109,7 @@ const ptBR: Translation<PetText> = {
     paused: 'A palavra de ativação falhou várias vezes e descansa um pouco',
     group: 'Palavra de ativação',
     enabled: {
-      title: 'Palavra de ativação',
+      title: 'Acorde pelo nome',
       description: 'Ligada, ouvir a palavra no microfone faz Coo começar a escutar sem a tecla de falar; o reconhecimento é feito aqui e nenhum áudio é enviado',
     },
     keywords: {
@@ -341,7 +341,10 @@ const ptBR: Translation<PetText> = {
     noBuild: 'Não há pacote pré-compilado para esta plataforma',
     electronSize: 'Electron 44.4.4, cerca de 150 MB',
 
-    voice: 'Entrada de voz',
+    voice: 'Voz',
+    voiceHint: 'Como ele é acordado, qual microfone te ouve e qual motor lê as palavras',
+    more: 'Mais ajustes',
+    less: 'Menos ajustes',
     enable: 'Ligar a entrada de voz',
     enabledHint: 'O microfone fica aberto; a fala vai para Coo conforme o modo de escuta',
     enabledHintOnPress: 'O microfone abre enquanto a tecla para falar está pressionada e fecha ao soltar',

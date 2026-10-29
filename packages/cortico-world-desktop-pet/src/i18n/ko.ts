@@ -109,7 +109,7 @@ const ko: Translation<PetText> = {
     paused: '호출어가 잇달아 실패해서 잠시 쉬고 있습니다',
     group: '호출어',
     enabled: {
-      title: '호출어',
+      title: '이름으로 깨우기',
       description: '켜면 마이크에서 이 말이 들릴 때 말하기 키를 누르지 않아도 Coo가 듣기 시작합니다. 인식은 이 컴퓨터에서 하고 녹음은 보내지 않습니다',
     },
     keywords: {
@@ -341,7 +341,10 @@ const ko: Translation<PetText> = {
     noBuild: '이 플랫폼용 사전 빌드 패키지 없음',
     electronSize: 'Electron 44.4.4, 약 150 MB',
 
-    voice: '음성 입력',
+    voice: '음성',
+    voiceHint: '어떻게 부르고, 어느 마이크로 듣고, 어느 엔진이 글자로 바꾸는지',
+    more: '추가 설정',
+    less: '설정 접기',
     enable: '음성 입력 켜기',
     enabledHint: '마이크가 계속 열려 있고, 말한 내용은 듣는 방식에 따라 Coo에게 전달됩니다',
     enabledHintOnPress: '말하기 키를 누르는 동안만 마이크를 열고, 떼면 닫습니다',

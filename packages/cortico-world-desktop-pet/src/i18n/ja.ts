@@ -109,7 +109,7 @@ const ja: Translation<PetText> = {
     paused: 'ウェイクワードが続けて失敗したので、しばらく休みます',
     group: 'ウェイクワード',
     enabled: {
-      title: 'ウェイクワード',
+      title: '名前で起こす',
       description: 'オンにすると、マイクにこの言葉が入ると話すキーを押さなくても Coo が聞き始めます。認識はこの端末で行い、録音は送信しません',
     },
     keywords: {
@@ -341,7 +341,10 @@ const ja: Translation<PetText> = {
     noBuild: 'このプラットフォーム用のビルド済みパッケージがありません',
     electronSize: 'Electron 44.4.4、約 150 MB',
 
-    voice: '音声入力',
+    voice: '音声',
+    voiceHint: 'どう呼びかけるか、どのマイクが聞くか、どのエンジンが文字にするか',
+    more: 'その他の設定',
+    less: '設定を閉じる',
     enable: '音声入力をオンにする',
     enabledHint: 'マイクは開いたままで、話した内容は聞き取り方の設定どおり Coo に届きます',
     enabledHintOnPress: '発話キーを押している間だけマイクを開き、離すと閉じます',

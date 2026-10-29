@@ -109,7 +109,7 @@ const de: Translation<PetText> = {
     paused: 'Das Wake-Word scheiterte wiederholt und pausiert eine Weile',
     group: 'Wake-Word',
     enabled: {
-      title: 'Wake-Word',
+      title: 'Mit Namen wecken',
       description: 'Wenn an, fängt Coo an zuzuhören, sobald das Wort im Mikrofon zu hören ist, ohne Sprechtaste; erkannt wird hier, es wird kein Ton gesendet',
     },
     keywords: {
@@ -341,7 +341,10 @@ const de: Translation<PetText> = {
     noBuild: 'Kein vorgefertigtes Paket für diese Plattform',
     electronSize: 'Electron 44.4.4, etwa 150 MB',
 
-    voice: 'Spracheingabe',
+    voice: 'Sprache',
+    voiceHint: 'Wie es geweckt wird, welches Mikrofon hört und welche Erkennung die Wörter liest',
+    more: 'Weitere Einstellungen',
+    less: 'Weniger Einstellungen',
     enable: 'Spracheingabe einschalten',
     enabledHint: 'Das Mikrofon bleibt offen; was du sagst, geht je nach Zuhörmodus an Coo',
     enabledHintOnPress: 'Das Mikrofon öffnet sich, solange die Sprechtaste gehalten wird, und schließt sich nach dem Loslassen',

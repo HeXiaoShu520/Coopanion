@@ -109,7 +109,7 @@ const zhHant: Translation<PetText> = {
     paused: '喚醒詞接連出錯，先歇一會兒',
     group: '喚醒詞',
     enabled: {
-      title: '喚醒詞',
+      title: '叫名字就能叫醒它',
       description: '開著時，麥克風裡出現這個詞就讓 Coo 開始聽，不必按說話鍵；在本機辨識，錄音不上傳',
     },
     keywords: {
@@ -341,7 +341,10 @@ const zhHant: Translation<PetText> = {
     noBuild: '此平台沒有預先編譯套件',
     electronSize: 'Electron 44.4.4，約 150 MB',
 
-    voice: '語音輸入',
+    voice: '語音',
+    voiceHint: '怎麼叫醒它、用哪個麥克風聽、辨識用哪個引擎，都在這張卡裡',
+    more: '更多設定',
+    less: '收起設定',
     enable: '開啟語音輸入',
     enabledHint: '麥克風保持開啟，依收音方式傳送給 Coo',
     enabledHintOnPress: '按住說話鍵時開啟麥克風，放開後關閉',

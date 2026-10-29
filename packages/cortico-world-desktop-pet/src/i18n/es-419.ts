@@ -109,7 +109,7 @@ const es419: Translation<PetText> = {
     paused: 'La palabra de activación falló varias veces y descansa un rato',
     group: 'Palabra de activación',
     enabled: {
-      title: 'Palabra de activación',
+      title: 'Despiértalo con su nombre',
       description: 'Encendido, al oír la palabra en el micrófono Coo empieza a escuchar sin la tecla de hablar; se reconoce aquí y no se envía ningún audio',
     },
     keywords: {
@@ -341,7 +341,10 @@ const es419: Translation<PetText> = {
     noBuild: 'No hay paquete precompilado para esta plataforma',
     electronSize: 'Electron 44.4.4, unos 150 MB',
 
-    voice: 'Entrada de voz',
+    voice: 'Voz',
+    voiceHint: 'Cómo se despierta, qué micrófono te oye y qué motor lee las palabras',
+    more: 'Más ajustes',
+    less: 'Menos ajustes',
     enable: 'Activar la entrada de voz',
     enabledHint: 'El micrófono queda abierto; lo que dices llega a Coo según el modo de escucha',
     enabledHintOnPress: 'El micrófono se abre mientras mantienes la tecla para hablar y se cierra al soltarla',
