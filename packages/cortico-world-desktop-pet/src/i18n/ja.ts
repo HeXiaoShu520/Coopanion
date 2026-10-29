@@ -104,6 +104,7 @@ const ja: Translation<PetText> = {
     noWords: 'ウェイクワードがまだ書かれていません',
     incomplete: 'ウェイクワードのモデルのファイルが足りません。もう一度ダウンロードしてください',
     loadFailed: (why: string) => `ウェイクワードのモデルを読み込めませんでした：${why}`,
+    unknownTokens: (what: string) => `モデルにない語です：${what}。ピンインで、音節ごとに頭子音と韻母を分けて記入してください。`,
     notListening: 'ウェイクワードは聞いていません',
     paused: 'ウェイクワードが続けて失敗したので、しばらく休みます',
     group: 'ウェイクワード',

@@ -104,6 +104,7 @@ const de: Translation<PetText> = {
     noWords: 'Es ist noch kein Wake-Word eingetragen',
     incomplete: 'Das Wake-Word-Modell ist unvollständig: Lade es erneut herunter',
     loadFailed: (why: string) => `Das Wake-Word-Modell konnte nicht geladen werden: ${why}`,
+    unknownTokens: (what: string) => `Das Modell kennt diese Wörter nicht: ${what}. In Pinyin schreiben, Anlaut und Auslaut jeder Silbe getrennt.`,
     notListening: 'Das Wake-Word hört nicht zu',
     paused: 'Das Wake-Word scheiterte wiederholt und pausiert eine Weile',
     group: 'Wake-Word',

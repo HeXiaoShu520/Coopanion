@@ -10,10 +10,12 @@ import { join } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
 import { petText } from '../../src/i18n/index.ts';
 import {
-  WakeWord, keywordLines, keywordWords, type WakeModule, type WakeSpotter, type WakeStream,
+  WakeWord, keywordLines, keywordTokens, keywordWords, type WakeModule, type WakeSpotter, type WakeStream,
 } from '../../src/voice/kws.ts';
 
 const t = petText('zh').wake;
+/** The model's own table: the tokens the sample keywords are heard as. */
+const VOCAB = '▁小 0\n▁可 1\n▁x 2\n▁y 3\n';
 
 /** A logger that keeps what was warned about. */
 interface QuietLog extends Logger { readonly warnings: string[] }
@@ -85,8 +87,10 @@ function setup(options: Options = {}): Harness {
   writeFileSync(keywordsFile, options.words === null ? '' : options.words ?? '▁小 ▁可 :2.0 #0.4 @小可\n');
   const paths: Record<string, string> = {};
   for (const role of ['encoder', 'decoder', 'joiner', 'tokens']) {
-    paths[role] = join(dir, `${role}.onnx`);
-    writeFileSync(paths[role]!, role);
+    // only the spotter reads its own files; the table is read here, to check the keywords before it is built
+    const file = role === 'tokens' ? 'tokens.txt' : `${role}.onnx`;
+    paths[role] = join(dir, file);
+    writeFileSync(paths[role]!, role === 'tokens' ? VOCAB : role);
   }
   if (options.incomplete) delete paths.tokens;
   const spotter = new FakeSpotter();
@@ -121,6 +125,11 @@ describe('a keywords file', () => {
   it('drops blank lines and comments, and keeps one keyword a line', () => {
     expect(keywordLines('# what may wake it\n\n  ▁小 ▁可  \r\n@小可\n')).toEqual(['▁小 ▁可', '@小可']);
   });
+
+  it('reads the tokens a line is heard as, without its tuning or what it shows', () => {
+    expect(keywordTokens('▁小 ▁可 :2.0 #0.4 @小可')).toEqual(['▁小', '▁可']);
+    expect(keywordTokens('x iǎo k ě @小可')).toEqual(['x', 'iǎo', 'k', 'ě']);
+  });
 });
 
 describe('starting the spotter', () => {
@@ -149,6 +158,14 @@ describe('starting the spotter', () => {
     await h.wake.start();
     expect(h.wake.state().phase).toBe('error');
     expect(h.wake.state().detail).toBe(t.loadFailed('no such model'));
+  });
+
+  it('is an error instead of a crash when a keyword is written in words the model has no tokens for', async () => {
+    const h = setup({ words: '小月小月\n' });
+    await h.wake.start();
+    expect(h.wake.state()).toMatchObject({ phase: 'error', detail: t.unknownTokens('小月小月') });
+    // sherpa-onnx ends the process on a keyword it cannot encode, so the spotter is never built
+    expect(h.configs).toEqual([]);
   });
 
   it('listens with the person\'s own words, at 16 kHz and the threshold set', async () => {

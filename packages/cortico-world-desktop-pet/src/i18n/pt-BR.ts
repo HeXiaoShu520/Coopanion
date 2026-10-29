@@ -104,6 +104,7 @@ const ptBR: Translation<PetText> = {
     noWords: 'Ainda não há nenhuma palavra de ativação',
     incomplete: 'Faltam arquivos no modelo de palavra de ativação: baixe-o de novo',
     loadFailed: (why: string) => `Não foi possível carregar o modelo de palavra de ativação: ${why}`,
+    unknownTokens: (what: string) => `O modelo não tem estas palavras: ${what}. Escreva em pinyin, separando a inicial e a final de cada sílaba.`,
     notListening: 'A palavra de ativação não está escutando',
     paused: 'A palavra de ativação falhou várias vezes e descansa um pouco',
     group: 'Palavra de ativação',

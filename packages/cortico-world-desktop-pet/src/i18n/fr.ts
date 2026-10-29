@@ -104,6 +104,7 @@ const fr: Translation<PetText> = {
     noWords: 'Aucun mot d’éveil n’est encore écrit',
     incomplete: 'Le modèle de mot d’éveil est incomplet : télécharge-le de nouveau',
     loadFailed: (why: string) => `Le modèle de mot d’éveil n’a pas pu être chargé : ${why}`,
+    unknownTokens: (what: string) => `Le modèle ne connaît pas ces mots : ${what}. Écrire en pinyin, en séparant l’initiale et la finale de chaque syllabe.`,
     notListening: 'Le mot d’éveil n’écoute pas',
     paused: 'Le mot d’éveil a échoué plusieurs fois et se repose un moment',
     group: 'Mot d’éveil',

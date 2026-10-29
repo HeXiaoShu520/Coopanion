@@ -120,6 +120,7 @@ export default {
     noWords: '还没有写唤醒词',
     incomplete: '唤醒词模型文件不完整，请重新下载',
     loadFailed: (why: string) => `唤醒词模型载入失败：${why}`,
+    unknownTokens: (what: string) => `模型的词表里没有：${what}。请按拼音填写，声母和韵母用空格隔开`,
     notListening: '唤醒词没有在听',
     paused: '唤醒词接连出错，先歇一会儿',
     /** 面板与配置里这一节的标题、开关、词表、灵敏度和间隔 */

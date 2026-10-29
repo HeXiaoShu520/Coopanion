@@ -104,6 +104,7 @@ const zhHant: Translation<PetText> = {
     noWords: '還沒有寫喚醒詞',
     incomplete: '喚醒詞模型檔案不完整，請重新下載',
     loadFailed: (why: string) => `喚醒詞模型載入失敗：${why}`,
+    unknownTokens: (what: string) => `模型的詞表裡沒有：${what}。請按拼音填寫，聲母和韻母用空格隔開`,
     notListening: '喚醒詞沒有在聽',
     paused: '喚醒詞接連出錯，先歇一會兒',
     group: '喚醒詞',

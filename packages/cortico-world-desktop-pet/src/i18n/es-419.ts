@@ -104,6 +104,7 @@ const es419: Translation<PetText> = {
     noWords: 'Todavía no hay ninguna palabra de activación',
     incomplete: 'Faltan archivos del modelo de activación: descárgalo de nuevo',
     loadFailed: (why: string) => `No se pudo cargar el modelo de activación: ${why}`,
+    unknownTokens: (what: string) => `El modelo no tiene estas palabras: ${what}. Escríbelo en pinyin, separando la inicial y la final de cada sílaba.`,
     notListening: 'La palabra de activación no está escuchando',
     paused: 'La palabra de activación falló varias veces y descansa un rato',
     group: 'Palabra de activación',

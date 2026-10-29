@@ -83,8 +83,20 @@ export function keywordWords(line: string): string {
   // `tokens :boost #threshold @what it shows`: the `@` part is the words, once the person wrote one
   const at = line.lastIndexOf('@');
   if (at >= 0) return line.slice(at + 1).trim();
-  // no `@`: the tokens are the words, less the `:boost` and `#threshold` tails
-  return line.split('#')[0]!.replace(/:\s*[-\d.]+\s*$/, '').trim();
+  return keywordHead(line);
+}
+
+/** The tokens a line is heard as, which the model's own table has to have. */
+export function keywordTokens(line: string): string[] {
+  const head = keywordHead(line);
+  return head ? head.split(/\s+/) : [];
+}
+
+/** The `tokens :boost #threshold` part of a line: what is left once what it shows is taken off. */
+function keywordHead(line: string): string {
+  const at = line.lastIndexOf('@');
+  const tokens = at >= 0 ? line.slice(0, at) : line;
+  return tokens.split('#')[0]!.replace(/:\s*[-\d.]+\s*$/, '').trim();
 }
 
 /** The lines a keywords file is made of: one a line, blank lines and `#` comments left out. */
@@ -114,12 +126,36 @@ export class WakeWord {
 
   /** The words that may wake the pet, as the file has them. */
   words(): string[] {
+    return this.lines().map(keywordWords);
+  }
+
+  /** The keyword lines the spotter is built from, as they stand on disk now. */
+  private lines(): string[] {
     const file = this.opts.keywordsFile();
     try {
-      return existsSync(file) ? keywordLines(readFileSync(file, 'utf8')).map(keywordWords) : [];
+      return existsSync(file) ? keywordLines(readFileSync(file, 'utf8')) : [];
     } catch {
       return [];
     }
+  }
+
+  /**
+   * The tokens a keyword needs that the model's table does not have. sherpa-onnx ends the process when
+   * a keyword cannot be encoded, so a word written in characters where the model wants its own tokens
+   * is refused here, while there is still a process to say why.
+   */
+  private unknownTokens(table: string): string[] {
+    let vocab: Set<string>;
+    try {
+      // `<token> <id>` a line; the id is the spotter's business, the first column is the word
+      vocab = new Set(readFileSync(table, 'utf8').split(/\r?\n/).map((line) => line.trim().split(/\s+/)[0]!).filter(Boolean));
+    } catch {
+      // an unreadable table is the spotter's own failure to report, not this check's
+      return [];
+    }
+    const missing: string[] = [];
+    for (const line of this.lines()) for (const token of keywordTokens(line)) if (!vocab.has(token)) missing.push(token);
+    return missing;
   }
 
   /** Why nothing can be heard now, or null: no file at all, or the spotter failed. */
@@ -144,6 +180,12 @@ export class WakeWord {
     if (!this.words().length) { this.phase = 'stopped'; this.detail = this.t.noWords; return; }
     // the store leaves out a role whose file is missing: the spotter needs every one of them
     if (!ROLES.every((role) => { const file = files.paths[role]; return !!file && existsSync(file); })) { this.phase = 'error'; this.detail = this.t.incomplete; return; }
+    const unknown = this.unknownTokens(files.paths.tokens!);
+    if (unknown.length) {
+      this.phase = 'error';
+      this.detail = this.t.unknownTokens([...new Set(unknown)].slice(0, 4).join(' '));
+      return;
+    }
     try {
       const wake = (this.opts.load ?? loadWake)();
       const settings = this.opts.settings();

@@ -104,6 +104,7 @@ const ko: Translation<PetText> = {
     noWords: '호출어가 아직 없습니다',
     incomplete: '호출어 모델 파일이 빠졌습니다. 다시 다운로드하세요',
     loadFailed: (why: string) => `호출어 모델을 불러오지 못했습니다: ${why}`,
+    unknownTokens: (what: string) => `모델에 없는 단어입니다: ${what}. 병음으로, 음절마다 성모와 운모를 띄어 적으세요.`,
     notListening: '호출어가 듣고 있지 않습니다',
     paused: '호출어가 잇달아 실패해서 잠시 쉬고 있습니다',
     group: '호출어',

@@ -123,6 +123,7 @@ const en: PetText = {
     noWords: 'No wake word is written yet',
     incomplete: 'The wake word model is incomplete, download it again',
     loadFailed: (why: string) => `The wake word model could not be loaded: ${why}`,
+    unknownTokens: (what: string) => `The model's word table has no ${what}. Write it in pinyin, a syllable's initial and final apart.`,
     notListening: 'The wake word is not listening',
     paused: 'The wake word kept failing, so it is resting for a while',
     group: 'Wake word',
