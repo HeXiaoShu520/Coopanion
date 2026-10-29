@@ -397,6 +397,8 @@ export class DesktopPetWorld implements World {
   private wasSpeaking = false;
   /** Whether a held talk key has heard anything at all: let go over silence, the listening it opened ends. */
   private talkHeard = false;
+  /** Whether the page has been told the microphone is open for the wake word alone. */
+  private wakeArmedShown = false;
   private screen: { w: number; h: number } | null = null;
   /** The pet window said it is hidden (its menu's or the tray's 「隐藏」); reset when a page connects. */
   private petHidden = false;
@@ -1064,6 +1066,8 @@ export class DesktopPetWorld implements World {
     void this.syncHotkey();
     void this.syncTypeKey();
     void this.syncWake();
+    // the wake word can start or stop waiting without a frame: the model, the keyword or the microphone changed
+    this.syncWakeArmed();
     // the person changed what a quiet holds back: theirs wins
     if (this.quiet && (this.cfg.sound !== this.quiet.base.sound || this.cfg.roam !== this.quiet.base.roam)) this.endQuiet();
     this.server.syncOverlay();
@@ -1644,6 +1648,7 @@ export class DesktopPetWorld implements World {
       this.listenOpen = false;
       this.server.sendPet({ t: 'listen', phase: 'none' });
     }
+    this.syncWakeArmed();
   }
 
   /**
@@ -1699,7 +1704,7 @@ export class DesktopPetWorld implements World {
   }
 
   private onAudio(frame: Int16Array): void {
-    if (!this.cfg.asr.enabled || !this.micWanted()) return;
+    if (!this.cfg.asr.enabled || !this.micWanted()) { this.syncWakeArmed(); return; }
     // the wake word's window was the only thing holding the gate open, and it has just closed
     if (this.woke && !this.wakeOpen() && !this.gateOpen()) this.missedWake();
     // the wake word hears every frame, gate or no gate: hearing it is what opens the gate
@@ -1724,6 +1729,8 @@ export class DesktopPetWorld implements World {
       if (open) this.server.sendPet({ t: 'level', level: this.level, speaking });
     }
     if (open) this.schedulePack();
+    // the wake word takes the gate back once the listening it opened is over
+    this.syncWakeArmed();
   }
 
   private async drain(): Promise<void> {
@@ -1819,6 +1826,21 @@ export class DesktopPetWorld implements World {
   /** The spotter is hearing, so the microphone has to stay open for it. */
   private wakeListening(): boolean {
     return this.cfg.wake.enabled && this.wake?.state().phase === 'listening';
+  }
+
+  /**
+   * Whether the wake word is what the microphone is open for: the word is being spotted and nothing of the person's is
+   * being heard into the pet yet. The page draws this as rings leaving the body, the one wait that is not listening.
+   */
+  private wakeArmed(): boolean {
+    return this.wakeListening() && this.micWanted() && !this.gateOpen();
+  }
+
+  private syncWakeArmed(): void {
+    const armed = this.wakeArmed();
+    if (armed === this.wakeArmedShown) return;
+    this.wakeArmedShown = armed;
+    this.server.sendPet({ t: 'wake', armed });
   }
 
   /** The wake word model's files by role, or why they are not there. */

@@ -106,6 +106,8 @@ const voiceGlow = createVoiceGlow({ rgb: () => tint('--skin-eye', [0, 168, 112])
 let voiceTurn = false;
 /** Whether, as of the last reading, the microphone has the person's voice in it and not just an open room. */
 let hearing = false;
+/** Whether the microphone is open for the wake word alone: nothing said yet is being heard into the pet. */
+let wakeArmed = false;
 if (host) sfx.unlock();
 else ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, () => sfx.unlock(), { capture: true }));
 
@@ -359,6 +361,8 @@ function onOrder(m) {
     // how loud the person is, while the microphone is open, and whether that is their voice or the room:
     // the light waits while it is only the room and comes up when it is them
     case 'level': voiceGlow.level(m.level); hearing = !!m.speaking; break;
+    // the wake word is what the microphone is open for: the light sends rings out instead of breathing
+    case 'wake': wakeArmed = !!m.armed; break;
     // a sentence of the reply was lost in transit: the light shows it
     case 'dropped': voiceGlow.fault(); break;
     case 'ask': dropAsks(); queue.push({ kind: 'ask', id: m.id, question: m.question, options: m.options || [], own: m.own !== false }); holdRoam(20); break;
@@ -1829,8 +1833,9 @@ function stepBackdrop(dt) {
     hearing: bodyState.listening && hearing,
     speaking: voiceOut.active,
     thinking: bodyState.thinking && voiceTurn,
+    armed: wakeArmed && !bodyState.listening,
   }) : null;
-  if (light) body?.setHalo(Math.max(light.k, backdrop.k * HALO_STRENGTH), Math.max(light.reach, prefs.glow), light.rgb);
+  if (light) body?.setHalo(Math.max(light.k, backdrop.k * HALO_STRENGTH), Math.max(light.reach, prefs.glow), light.rgb, light.rings);
   else body?.setHalo(backdrop.k * HALO_STRENGTH, prefs.glow);
 }
 

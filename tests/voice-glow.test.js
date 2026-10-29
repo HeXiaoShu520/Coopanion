@@ -30,6 +30,19 @@ describe('the voice as light on the body', () => {
     expect(spoken.at(-1).k).toBeGreaterThan(waiting.at(-1).k * 2);
   });
 
+  it('sends rings out while it waits for the wake word, and none while it listens', () => {
+    // the light of a ring a given number of seconds into the wait
+    const ring = (seconds) => run(createVoiceGlow(), seconds, { armed: true }).at(-1).rings[0];
+    const own = ring(.96), far = ring(2.9);
+    // one ring travels outwards and fades as it goes
+    expect(far.s).toBeGreaterThan(own.s);
+    expect(far.a).toBeLessThan(own.a);
+    // waiting for the word is the dimmest of the waits, and the only one with rings
+    expect(run(createVoiceGlow(), 2, { armed: true }).at(-1).k).toBeLessThan(run(createVoiceGlow(), 2, { listening: true }).at(-1).k);
+    expect(run(createVoiceGlow(), 1, { hearing: true }).at(-1).rings).toBeNull();
+    expect(run(createVoiceGlow(), 1, { speaking: true }).at(-1).rings).toBeNull();
+  });
+
   it('follows the person\'s voice: the louder they are, the brighter the light', () => {
     const quiet = createVoiceGlow(), loud = createVoiceGlow();
     quiet.level(-50); loud.level(-14);

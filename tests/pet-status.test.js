@@ -313,6 +313,20 @@ describe('the voice as light on the body', () => {
     expect(p.halo.at(-1)[0]).toBeGreaterThan(waiting * 2);
   });
 
+  it('sends rings out while it waits for the wake word, and stops when it is no longer waited for', () => {
+    const p = page();
+    p.onOrder({ t: 'wake', armed: true });
+    frames(p, 1);
+    const [k, , rgb, rings] = p.halo.at(-1);
+    expect(rgb).toEqual(colour(p, '--skin-eye'));
+    expect(k).toBeGreaterThan(0);
+    expect(k).toBeLessThan(.1);
+    expect(rings).toHaveLength(2);
+    p.onOrder({ t: 'wake', armed: false });
+    frames(p, 2);
+    expect(p.halo.at(-1)).toEqual([0, 7]);
+  });
+
   it('turns the light red for a moment when a sentence is lost, then goes out', () => {
     const p = page();
     p.onOrder({ t: 'listen', phase: 'start' });

@@ -132,8 +132,17 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
     // the frame's window onto the stage: all of it, or with the halo on, the halo's rect around the body (haloRect)
     const clip = document.createElement('div');
     clip.className = 'figure-clip';
-    clip.appendChild(frame);
+    // the rings a waiting wake word sends outwards, under the body: a share of one paint per colour, moved by transform alone
+    const rings = [0, 1].map(() => {
+      const el = document.createElement('div');
+      el.className = 'figure-ring';
+      Object.assign(el.style, { position: 'absolute', pointerEvents: 'none', borderRadius: '50%', opacity: '0', willChange: 'transform, opacity' });
+      return el;
+    });
+    clip.append(rings[0], rings[1], frame);
     let haloAt = '';
+    /** The rings' paint and box as last written: both change only when the colour or the body's box does. */
+    let ringPaint = '', ringBox = '';
     let ready = false, gone = false, seq = 0, size = bounds;
     let layout = null, z = null, words = null;
     const touches = touchGate();
@@ -192,11 +201,14 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
       /**
        * The light halo behind the body (pet-app's backdrop, and the voice's glow), as a CSS filter on the
        * frame's window cut down to the body's surroundings (haloRect), so it blurs only those; a `k` or
-       * `reach` of 0 removes it. `rgb` colours it; gray when the page names none. Called once a frame: it
-       * follows the body.
+       * `reach` of 0 removes it. `rgb` colours it; gray when the page names none. `ripples` are rings
+       * travelling out from the body — `[{ s, a }]`, a scale of the body's box and an alpha — drawn from
+       * the same colour under the body, so a wait for the wake word reads as the light moving, not only
+       * as it breathing. Called once a frame: it follows the body.
        */
-      setHalo(k, reach, rgb = HALO_GREY) {
+      setHalo(k, reach, rgb = HALO_GREY, ripples = null) {
         const r = k && reach > 0 ? haloRect(layout, size, reach, pack.effects?.reach) : null;
+        drawRings(r, rgb, ripples);
         const c = r ? `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${k.toFixed(2)})` : '';
         // two blurs, the inner one 3/7 of the outer (the halo's look at the default reach of 7)
         const inner = Math.max(1, Math.round(reach * 3 / 7));
@@ -254,4 +266,28 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
     addEventListener('message', onMessage);
     layer.appendChild(clip);
   });
+
+  /**
+   * The rings under the body for this frame: each takes the body's own box, so a scale of 1 sits on the silhouette and
+   * anything above it travels outwards. Only the transform and the alpha are written per frame; the paint changes
+   * when the colour does. No halo rect, no rings.
+   */
+  function drawRings(r, rgb, ripples) {
+    const b = layout?.box;
+    const shown = !!r && !!b && !!ripples?.length;
+    const paint = shown ? `radial-gradient(circle, rgba(0,0,0,0) 56%, rgb(${rgb[0]},${rgb[1]},${rgb[2]}) 66%, rgba(0,0,0,0) 76%)` : '';
+    if (paint && paint !== ringPaint) { ringPaint = paint; for (const el of rings) el.style.background = paint; }
+    const box = shown ? `${b.x - r.x},${b.y - r.y},${b.w},${b.h}` : '';
+    const moved = box !== ringBox;
+    if (moved) {
+      ringBox = box;
+      if (shown) for (const el of rings) Object.assign(el.style, { left: `${b.x - r.x}px`, top: `${b.y - r.y}px`, width: `${b.w}px`, height: `${b.h}px` });
+    }
+    for (let i = 0; i < rings.length; i++) {
+      const el = rings[i], ring = shown ? ripples[i] : null;
+      if (!ring) { if (el.style.opacity !== '0') el.style.opacity = '0'; continue; }
+      el.style.transform = `scale(${ring.s.toFixed(3)})`;
+      el.style.opacity = ring.a.toFixed(3);
+    }
+  }
 }
