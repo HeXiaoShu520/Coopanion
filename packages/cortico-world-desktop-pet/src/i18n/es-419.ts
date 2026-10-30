@@ -342,11 +342,17 @@ const es419: Translation<PetText> = {
     electronSize: 'Electron 44.4.4, unos 150 MB',
 
     voice: 'Voz',
-    voiceHint: 'Cómo se despierta, qué micrófono te oye y qué motor lee las palabras',
     more: 'Más ajustes',
     less: 'Menos ajustes',
     enable: 'Activar la entrada de voz',
-    enabledHint: 'El micrófono queda abierto; lo que dices llega a Coo según el modo de escucha',
+    /** Under the master switch: how a sentence starts right now, the wake word being the second way in */
+    talkHint: {
+      hold: (key: string) => `Mantén ${key} para hablar`,
+      toggle: (key: string) => `Pulsa ${key} para empezar y otra vez para terminar`,
+      always: 'Escucha siempre: haz una pausa al terminar y responde',
+      wakeHold: (key: string, word: string) => `Mantén ${key} para hablar o di «${word}»`,
+      wakeToggle: (key: string, word: string) => `Pulsa ${key} para empezar o di «${word}»`,
+    },
     enabledHintOnPress: 'El micrófono se abre mientras mantienes la tecla para hablar y se cierra al soltarla',
     disabledHint: 'Desactivada: el micrófono queda cerrado y la configuración de abajo espera',
     engine: 'Motor de reconocimiento',

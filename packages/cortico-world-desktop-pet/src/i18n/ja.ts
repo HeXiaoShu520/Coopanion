@@ -342,11 +342,17 @@ const ja: Translation<PetText> = {
     electronSize: 'Electron 44.4.4、約 150 MB',
 
     voice: '音声',
-    voiceHint: 'どう呼びかけるか、どのマイクが聞くか、どのエンジンが文字にするか',
     more: 'その他の設定',
     less: '設定を閉じる',
     enable: '音声入力をオンにする',
-    enabledHint: 'マイクは開いたままで、話した内容は聞き取り方の設定どおり Coo に届きます',
+    /** Under the master switch: how a sentence starts right now, the wake word being the second way in */
+    talkHint: {
+      hold: (key: string) => `${key} を押している間だけ話せます`,
+      toggle: (key: string) => `${key} を押すと開始、もう一度押すと終了します`,
+      always: 'ずっと聞いています。話し終えて少し黙ると答えます',
+      wakeHold: (key: string, word: string) => `${key} を押しながら話すか、「${word}」と呼びかけてください`,
+      wakeToggle: (key: string, word: string) => `${key} を押すか、「${word}」と呼びかけてください`,
+    },
     enabledHintOnPress: '発話キーを押している間だけマイクを開き、離すと閉じます',
     disabledHint: 'オフ：マイクは閉じたままで、下の設定は使われません',
     engine: '認識エンジン',

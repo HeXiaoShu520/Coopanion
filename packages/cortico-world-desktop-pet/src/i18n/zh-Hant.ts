@@ -342,11 +342,17 @@ const zhHant: Translation<PetText> = {
     electronSize: 'Electron 44.4.4，約 150 MB',
 
     voice: '語音',
-    voiceHint: '怎麼叫醒它、用哪個麥克風聽、辨識用哪個引擎，都在這張卡裡',
     more: '更多設定',
     less: '收起設定',
     enable: '開啟語音輸入',
-    enabledHint: '麥克風保持開啟，依收音方式傳送給 Coo',
+    /** Under the master switch: how a sentence starts right now, the wake word being the second way in */
+    talkHint: {
+      hold: (key: string) => `按住 ${key} 說話`,
+      toggle: (key: string) => `按一下 ${key} 開始，再按一下結束`,
+      always: '一直聽著，說完停一下它就回應',
+      wakeHold: (key: string, word: string) => `按住 ${key} 說話，或者叫一聲「${word}」`,
+      wakeToggle: (key: string, word: string) => `按一下 ${key} 開始，或者叫一聲「${word}」`,
+    },
     enabledHintOnPress: '按住說話鍵時開啟麥克風，放開後關閉',
     disabledHint: '已關閉：不開啟麥克風，下面的設定暫不生效',
     engine: '辨識引擎',

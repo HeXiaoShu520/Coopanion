@@ -373,11 +373,17 @@ const en: PetText = {
     electronSize: 'Electron 44.4.4, about 150 MB',
 
     voice: 'Voice',
-    voiceHint: 'How it is called, which microphone hears you, and which engine reads the words',
     more: 'More settings',
     less: 'Fewer settings',
     enable: 'Turn on voice input',
-    enabledHint: 'The microphone stays open; speech goes to Coo by the listening mode',
+    /** Under the master switch: how a sentence starts right now, the wake word being the second way in */
+    talkHint: {
+      hold: (key: string) => `Hold ${key} to talk`,
+      toggle: (key: string) => `Press ${key} to start, press again to stop`,
+      always: 'Listening all the time: pause when you finish and it answers',
+      wakeHold: (key: string, word: string) => `Hold ${key} to talk, or say “${word}”`,
+      wakeToggle: (key: string, word: string) => `Press ${key} to start, or say “${word}”`,
+    },
     enabledHintOnPress: 'The microphone opens while the talk key is held and closes after release',
     disabledHint: 'Off: the microphone stays closed, and the settings below wait',
     engine: 'Recognition engine',

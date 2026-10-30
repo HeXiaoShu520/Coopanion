@@ -371,11 +371,17 @@ export default {
     electronSize: 'Electron 44.4.4，约 150 MB',
 
     voice: '语音',
-    voiceHint: '怎么叫醒它、用哪个麦克风听、识别用哪个引擎，都在这张卡里',
     more: '更多设置',
     less: '收起设置',
     enable: '开启语音输入',
-    enabledHint: '麦克风保持开启，按收音方式发送给 Coo',
+    /** Under the master switch: how a sentence starts right now, the wake word being the second way in */
+    talkHint: {
+      hold: (key: string) => `按住 ${key} 说话`,
+      toggle: (key: string) => `按一下 ${key} 开始，再按一下结束`,
+      always: '一直听着，说完停一下它就回应',
+      wakeHold: (key: string, word: string) => `按住 ${key} 说话，或者叫一声「${word}」`,
+      wakeToggle: (key: string, word: string) => `按一下 ${key} 开始，或者叫一声「${word}」`,
+    },
     enabledHintOnPress: '按住说话键时打开麦克风，松开后关闭',
     disabledHint: '已关闭：不打开麦克风，下面的设置暂不生效',
     engine: '识别引擎',

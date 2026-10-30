@@ -27,6 +27,8 @@
 .pet-voicebody.off{opacity:.5}
 /* the button that opens the rows a person needs once: a line of its own, left with the names above it */
 .pet-morebtn{display:flex; justify-content:flex-start; padding:6px 0 10px}
+/* the wake word's rows tune the word rather than the recognizer: they start apart from the ones above */
+.pet-voicebody .mountrow.pet-groupstart{margin-top:14px}
 .pet-voicebody .mountrow .mname{width:min-content; min-width:6.2em}
 .pet-voicebody .mountrow .mdetail{min-width:8em}
 .pet-voicebody .mountrow .macts{flex:0 1 auto; min-width:0; flex-wrap:wrap; justify-content:flex-end}

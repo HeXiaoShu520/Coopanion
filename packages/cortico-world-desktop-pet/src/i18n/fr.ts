@@ -342,11 +342,17 @@ const fr: Translation<PetText> = {
     electronSize: 'Electron 44.4.4, environ 150 Mo',
 
     voice: 'Voix',
-    voiceHint: 'Comment il est réveillé, quel micro vous entend et quel moteur lit les mots',
     more: 'Plus de réglages',
     less: 'Moins de réglages',
     enable: 'Activer la saisie vocale',
-    enabledHint: "Le micro reste ouvert ; ce que vous dites va à Coo selon le mode d'écoute",
+    /** Under the master switch: how a sentence starts right now, the wake word being the second way in */
+    talkHint: {
+      hold: (key: string) => `Maintenez ${key} pour parler`,
+      toggle: (key: string) => `Appuyez sur ${key} pour commencer, de nouveau pour arrêter`,
+      always: 'Écoute en continu : marquez une pause et il répond',
+      wakeHold: (key: string, word: string) => `Maintenez ${key} ou dites « ${word} »`,
+      wakeToggle: (key: string, word: string) => `Appuyez sur ${key} ou dites « ${word} »`,
+    },
     enabledHintOnPress: "Le micro s'ouvre tant que la touche de parole est maintenue et se ferme au relâchement",
     disabledHint: 'Désactivée : le micro reste fermé, et les réglages ci-dessous attendent',
     engine: 'Moteur de reconnaissance',

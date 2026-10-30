@@ -342,11 +342,17 @@ const ko: Translation<PetText> = {
     electronSize: 'Electron 44.4.4, 약 150 MB',
 
     voice: '음성',
-    voiceHint: '어떻게 부르고, 어느 마이크로 듣고, 어느 엔진이 글자로 바꾸는지',
     more: '추가 설정',
     less: '설정 접기',
     enable: '음성 입력 켜기',
-    enabledHint: '마이크가 계속 열려 있고, 말한 내용은 듣는 방식에 따라 Coo에게 전달됩니다',
+    /** Under the master switch: how a sentence starts right now, the wake word being the second way in */
+    talkHint: {
+      hold: (key: string) => `${key}를 누르고 있는 동안 말할 수 있습니다`,
+      toggle: (key: string) => `${key}를 누르면 시작하고 다시 누르면 끝납니다`,
+      always: '항상 듣고 있습니다. 말을 마치고 잠깐 멈추면 답합니다',
+      wakeHold: (key: string, word: string) => `${key}를 누르고 말하거나 “${word}”라고 불러 보세요`,
+      wakeToggle: (key: string, word: string) => `${key}를 누르거나 “${word}”라고 불러 보세요`,
+    },
     enabledHintOnPress: '말하기 키를 누르는 동안만 마이크를 열고, 떼면 닫습니다',
     disabledHint: '꺼짐: 마이크는 닫혀 있고 아래 설정은 대기합니다',
     engine: '인식 엔진',

@@ -177,7 +177,7 @@ const voicePanel: WebUiPanel = {
     const { ui, root } = ctx;
     const text = petText(ctx.language);
     const t = text.panel;
-    const card = ui.sheet({ title: t.voice, desc: t.voiceHint });
+    const card = ui.sheet({ title: t.voice });
     root.appendChild(card.el);
     const s = card.body;
     const msg = ui.msgline('');
@@ -315,6 +315,8 @@ const voicePanel: WebUiPanel = {
     wakeRow.acts.append(btnWakeModel, wakeOn);
     // the words are the model's own tokens, which the hint beside the box says; the rest is tuning
     const wakeWordsRow = statusRow(ctx, wake.keywords.title);
+    // the rows below it tune the word rather than the recognizer
+    wakeWordsRow.row.classList.add('pet-groupstart');
     const wakeWords = ui.textarea({ rows: 4, placeholder: wake.hint });
     wakeWords.spellcheck = false;
     wakeWords.addEventListener('change', () => void call('setWake', [{ keywords: wakeWords.value }])());
@@ -347,12 +349,23 @@ const voicePanel: WebUiPanel = {
       mark.setAttribute('aria-valuenow', String(db));
       mark.setAttribute('aria-valuetext', `${db} dBFS`);
     };
+    /** The line under the master switch: how a sentence starts right now, the wake word being the second way. */
+    const talkHint = (mode: MicMode, key: string, word: string) => {
+      const h = t.talkHint;
+      if (mode === 'always') return h.always;
+      if (mode === 'toggle') return word ? h.wakeToggle(key, word) : h.toggle(key);
+      return word ? h.wakeHold(key, word) : h.hold(key);
+    };
     const render = (next: VoiceState) => {
       st = next;
       enabled.checked = next.enabled;
       master.classList.toggle('on', next.enabled);
       const onPressOn = next.input.mode === 'hold' && next.input.openOnPress;
-      masterHint.textContent = !next.enabled ? t.disabledHint : onPressOn ? t.enabledHintOnPress : t.enabledHint;
+      // the wake word is only a second way in while it is actually hearing
+      const wakeWord = next.wake.enabled && next.wake.phase === 'listening' ? next.wake.words[0] ?? '' : '';
+      masterHint.textContent = !next.enabled
+        ? t.disabledHint
+        : onPressOn ? t.enabledHintOnPress : talkHint(next.input.mode, next.input.keyLabel, wakeWord);
       settings.classList.toggle('off', !next.enabled);
       more.classList.toggle('off', !next.enabled);
       const engines: Partial<Record<Engine, string>> = { funasr: t.funasr, whisper: t.whisper };
@@ -407,11 +420,17 @@ const voicePanel: WebUiPanel = {
       // the spotter hears the frames the recognizer's microphone sends: with voice input off there are none
       const hearing = wk.enabled && next.enabled && wk.phase === 'listening';
       const problem = wk.enabled ? wk.detail : null;
-      wakeRow.set(hearing ? t.switchOn : t.switchOff, problem ? 'bad' : hearing ? 'on' : 'off', problem ?? (!next.enabled ? t.disabledHint : words));
+      const wm = wk.model;
+      // the model's download shows on this row: it is what the row is waiting for, and the button is gone by then
+      const fetching = wm.phase === 'working' ? t.downloading(progress(wm)) : null;
+      wakeRow.set(
+        fetching ?? (hearing ? t.switchOn : t.switchOff),
+        fetching ? 'busy' : problem ? 'bad' : hearing ? 'on' : 'off',
+        fetching ? wm.detail ?? '' : problem ?? (!next.enabled ? t.disabledHint : words),
+      );
       if (document.activeElement !== wakeWords) wakeWords.value = wk.keywords;
       if (document.activeElement !== wakeThreshold.field) wakeThreshold.field.value = String(wk.threshold);
       if (document.activeElement !== wakeCooldown.field) wakeCooldown.field.value = String(wk.cooldownMs);
-      const wm = wk.model;
       if (wm.phase === 'working') wakeModelRow.set(t.downloading(progress(wm)), 'busy', wm.detail ?? '');
       else if (wm.phase === 'error') wakeModelRow.set(t.downloadFailed, 'bad', wm.detail ?? '');
       else if (wm.phase === 'ready') wakeModelRow.set(t.downloaded, 'on', wm.path);

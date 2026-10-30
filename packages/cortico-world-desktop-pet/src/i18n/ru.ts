@@ -348,11 +348,17 @@ const ru: Translation<PetText> = {
     electronSize: 'Electron 44.4.4, около 150 МБ',
 
     voice: 'Голос',
-    voiceHint: 'Как его будить, какой микрофон слушает и какой движок распознаёт слова',
     more: 'Другие настройки',
     less: 'Свернуть настройки',
     enable: 'Включить голосовой ввод',
-    enabledHint: 'Микрофон остаётся открытым; сказанное отправляется Coo по настройке «Как слушать»',
+    /** Under the master switch: how a sentence starts right now, the wake word being the second way in */
+    talkHint: {
+      hold: (key: string) => `Держите ${key}, чтобы говорить`,
+      toggle: (key: string) => `Нажмите ${key}, чтобы начать, и ещё раз, чтобы закончить`,
+      always: 'Слушает постоянно: замолчите на миг, и он ответит',
+      wakeHold: (key: string, word: string) => `Держите ${key} или скажите «${word}»`,
+      wakeToggle: (key: string, word: string) => `Нажмите ${key} или скажите «${word}»`,
+    },
     enabledHintOnPress: 'Микрофон открывается, пока удерживается клавиша разговора, и закрывается, когда её отпускают',
     disabledHint: 'Выключено: микрофон закрыт, настройки ниже ждут',
     engine: 'Движок распознавания',
