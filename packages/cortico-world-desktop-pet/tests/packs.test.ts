@@ -119,6 +119,22 @@ describe('figure packs', () => {
     expect(off.bubble).toBeUndefined();
   });
 
+  it("leaves a preset's console colours out when they are not a whole set of hex colours per theme", () => {
+    const hues = { a: '#4562f5', a2: '#7b90fe', on: '#ffffff', t: '#3550d6', c3: '#8ea0c8', c4: '#8a8a90' };
+    const dark = { ...hues, a: '#7b93ff' };
+    const m = readManifest(pack({
+      ...base,
+      presets: [
+        { id: 'dusk', pick: {}, console: { light: hues, dark } },
+        { id: 'dawn', pick: {}, console: {} },
+        { id: 'noon', pick: {}, console: { light: hues, dark: { ...hues, on: '#zzz' } } },
+        { id: 'mist', pick: {}, console: { light: hues } },
+      ],
+    }));
+    if (typeof m === 'string') throw new Error(m);
+    expect(m.presets.map((p) => p.console)).toEqual([{ light: hues, dark }, undefined, undefined, undefined]);
+  });
+
   it('says a pack made for a newer manifest or contract needs the app updated', () => {
     expect(readManifest(pack({ ...base, manifest: 3 }))).toMatch(/更新应用/);
     expect(readManifest(pack({ ...base, api: 3 }))).toMatch(/更新应用/);

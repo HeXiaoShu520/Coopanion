@@ -26,6 +26,11 @@ describe('parseKeys', () => {
     expect(parseKeys('ctrl+hyper')).toEqual({ error: '不认识的键「hyper」' });
     expect(parseKeys('   ')).toEqual({ error: '没有给出按键' });
   });
+
+  it('rejects names that only exist on Object.prototype as unknown keys', () => {
+    expect(parseKeys('constructor')).toEqual({ error: '不认识的键「constructor」' });
+    expect(parseKeys('__proto__')).toEqual({ error: '不认识的键「__proto__」' });
+  });
 });
 
 describe('image', () => {

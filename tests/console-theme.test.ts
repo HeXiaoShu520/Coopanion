@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { figurePacks } from 'cortico-world-desktop-pet';
@@ -36,5 +36,17 @@ describe('console colours follow the pet', () => {
     followPetLook(dir, { figure: 'whale', scheme: 'kimi' }, packs);
     expect(theme(dir).selectedId).toBe('navigator');
     expect(theme(dir).custom.map((s) => s.id)).toEqual(['mine', ...WHALE_SCHEMES.map((s) => s.id)]);
+  });
+
+  it('skips a preset whose console colours are broken instead of failing the schemes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cc-badpack-'));
+    mkdirSync(join(root, 'ruin'));
+    writeFileSync(join(root, 'ruin', 'figure.json'), JSON.stringify({
+      manifest: 2, api: 2, id: 'ruin', name: { zh: '坏包' }, about: { zh: '一个坏包' },
+      entry: 'figure.js', export: 'createBody', axes: [], vocab: [],
+      presets: [{ id: 'ruin', pick: {}, console: {} }],
+    }));
+    const { packs: found } = figurePacks([root]);
+    expect(figureSchemes(found).map((s) => s.id)).not.toContain('coo-fig-ruin-ruin');
   });
 });

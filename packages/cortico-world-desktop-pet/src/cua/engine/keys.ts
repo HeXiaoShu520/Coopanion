@@ -43,7 +43,8 @@ add(['minus'], 0xBD);
 
 export function keyCode(name: string): KeyCode | null {
   const n = name.trim().toLowerCase();
-  if (NAMED[n]) return NAMED[n];
+  // own properties only: names like "constructor" and "__proto__" exist on Object.prototype too
+  if (Object.hasOwn(NAMED, n)) return NAMED[n];
   if (/^[a-z]$/.test(n)) return { vk: n.toUpperCase().charCodeAt(0), extended: false };
   if (/^[0-9]$/.test(n)) return { vk: n.charCodeAt(0), extended: false };
   return null;

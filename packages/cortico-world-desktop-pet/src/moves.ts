@@ -31,10 +31,11 @@ export function readMove(args: Record<string, unknown>, moves: readonly MoveTarg
   const none = params === undefined || params === null || (Array.isArray(params) && params.length === 0);
   if (typeof to === 'number' && Number.isFinite(to)) return none ? { kind: 'walk', to: Math.max(0, Math.min(1, to)), run } : { kind: 'badParams', target: null, got: JSON.stringify(params) };
   if (typeof to !== 'string') return { kind: 'noTarget' };
+  const own = Object.hasOwn(NAMED, to);
   const n = Number(to);
-  if (to in NAMED || (to.trim() !== '' && Number.isFinite(n))) {
+  if (own || (to.trim() !== '' && Number.isFinite(n))) {
     if (!none) return { kind: 'badParams', target: null, got: JSON.stringify(params) };
-    return { kind: 'walk', to: to in NAMED ? NAMED[to]! : Math.max(0, Math.min(1, n)), run };
+    return { kind: 'walk', to: own ? NAMED[to]! : Math.max(0, Math.min(1, n)), run };
   }
   const target = moves.find((m) => m.id === to || Object.values(m.name).includes(to));
   if (!target) return { kind: 'badTarget', got: JSON.stringify(to) };

@@ -187,6 +187,19 @@ function bubbleOf(raw: unknown): BubbleTheme | undefined {
   const light = theme(r?.light), dark = theme(r?.dark);
   return light && dark ? { light, dark } : undefined;
 }
+
+/** `raw` as the settings window's colours, or undefined when it is not one whole set of hex colours per theme (the window reads them whole). */
+function consoleOf(raw: unknown): FigurePreset['console'] | undefined {
+  const hues = (v: unknown): ConsoleHues | null => {
+    const c = v as Record<string, unknown> | null;
+    return c && typeof c === 'object' && [c.a, c.a2, c.on, c.t, c.c3, c.c4].every((h) => typeof h === 'string' && HEX.test(h))
+      ? { a: c.a as string, a2: c.a2 as string, on: c.on as string, t: c.t as string, c3: c.c3 as string, c4: c.c4 as string } : null;
+  };
+  const r = raw as Record<string, unknown> | null;
+  const light = hues(r?.light), dark = hues(r?.dark);
+  return light && dark ? { light, dark } : undefined;
+}
+
 /** A number in [min, max], else `fallback`. */
 const within = (v: unknown, min: number, max: number, fallback: number) => (typeof v === 'number' && v >= min && v <= max ? v : fallback);
 
@@ -322,7 +335,7 @@ export function readManifest(dir: string, builtin = false, skipped: string[] = [
       id: p.id, pick: Object.fromEntries(axes.map((a) => [a.id, pick[a.id] as string])),
       ...(namesOf(p.name) ? { name: namesOf(p.name)! } : {}),
       ...(typeof p.accent === 'string' ? { accent: p.accent } : {}),
-      ...(p.console && typeof p.console === 'object' ? { console: p.console as FigurePreset['console'] } : {}),
+      ...(consoleOf(p.console) ? { console: consoleOf(p.console)! } : {}),
       ...(bubbleOf(p.bubble) ? { bubble: bubbleOf(p.bubble)! } : {}),
     });
   }
