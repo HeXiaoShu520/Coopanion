@@ -109,6 +109,8 @@ export class WakeWord {
   private stream: WakeStream | null = null;
   private phase: WakePhase = 'stopped';
   private detail: string | null = null;
+  /** The words the running spotter was built for: a frame asks for them fifty times a second, so the file is read once at start. */
+  private currentWords: string[] = [];
   private starting: Promise<void> | null = null;
   private failures = 0;
   private backoffUntil = 0;
@@ -124,9 +126,9 @@ export class WakeWord {
     return { phase: this.phase, detail: this.detail, words: this.words() };
   }
 
-  /** The words that may wake the pet, as the file has them. */
+  /** The words that may wake the pet: those the spotter was built from, still readable after it stopped. */
   words(): string[] {
-    return this.lines().map(keywordWords);
+    return this.currentWords;
   }
 
   /** The keyword lines the spotter is built from, as they stand on disk now. */
@@ -175,9 +177,11 @@ export class WakeWord {
     this.release();
     this.failures = 0;
     this.backoffUntil = 0;
+    // the words on disk now are the ones this start is for
+    this.currentWords = this.lines().map(keywordWords);
     const files = this.opts.model();
     if ('missing' in files) { this.phase = 'stopped'; this.detail = files.missing; return; }
-    if (!this.words().length) { this.phase = 'stopped'; this.detail = this.t.noWords; return; }
+    if (!this.currentWords.length) { this.phase = 'stopped'; this.detail = this.t.noWords; return; }
     // the store leaves out a role whose file is missing: the spotter needs every one of them
     if (!ROLES.every((role) => { const file = files.paths[role]; return !!file && existsSync(file); })) { this.phase = 'error'; this.detail = this.t.incomplete; return; }
     const unknown = this.unknownTokens(files.paths.tokens!);

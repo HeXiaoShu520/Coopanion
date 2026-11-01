@@ -1,74 +1,98 @@
 /**
- * Voice input end to end inside the World: PCM frames over the pet socket → segmenter →
- * FunASR or Whisper (a stand-in for sherpa-onnx's recognizer that answers with a set line) →
- * `desktop-pet.speech` event, with the listen phases the page shows along the way.
+ * Voice input end to end inside the World: PCM frames over the pet socket → segmenter → Doubao's
+ * streaming recognition (a service of our own on the other side) → `desktop-pet.speech` event,
+ * with the listen phases the page shows along the way.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { createServer } from 'node:http';
-import { createHash } from 'node:crypto';
+import { gzipSync } from 'fflate';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DESKTOP_PET_DEFAULTS } from '../src/config.ts';
+import { DESKTOP_PET_DEFAULTS, type MicMode } from '../src/config.ts';
 import { DesktopPetWorld } from '../src/world.ts';
 import { petText } from '../src/i18n/index.ts';
-import type { MicMode } from '../src/config.ts';
 import type { Language } from 'cortico/core/language.ts';
-import type { SherpaModule } from '../src/asr/sherpa.ts';
-import type { ModelSpec } from '../src/runtime/store.ts';
 import { parseHotkey, type Hotkey } from '../src/asr/hotkey.ts';
 import { rmsDb } from '../src/asr/segmenter.ts';
+import { KWS_MODEL } from '../src/runtime/store.ts';
+import { SAUC_URL } from '../src/voice/protocol.ts';
+import type { WakeModule, WakeSpotter } from '../src/voice/kws.ts';
+import type { SocketHandlers, SocketOpen, SpeechSocket } from '../src/voice/socket.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 import { FakePage } from './helpers/page.ts';
-import { fakeSapi } from './helpers/fake-sapi.ts';
 
-/** A recognizer that answers `reply(samples)`; `decodes` lists how many samples each decode got. */
-interface FakeFunAsr { sherpa: SherpaModule; decodes: number[]; configs: Array<Record<string, unknown>>; reply: (samples: number) => string; beforeLoad?: () => Promise<void> }
+const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
+const be32 = (value: number): Uint8Array => {
+  const bytes = new Uint8Array(4);
+  new DataView(bytes.buffer).setUint32(0, value, false);
+  return bytes;
+};
 
-function fakeFunAsr(text: string | ((samples: number) => string)): FakeFunAsr {
-  const fake = { decodes: [] as number[], configs: [] as Array<Record<string, unknown>>, reply: typeof text === 'string' ? () => text : text } as FakeFunAsr;
-  fake.sherpa = {
-    OfflineRecognizer: {
-      createAsync: async (config) => {
-        fake.configs.push(config);
-        await fake.beforeLoad?.();
-        return {
-          createStream: () => {
-            const stream = { samples: 0, acceptWaveform: (w: { samples: Float32Array }) => { stream.samples += w.samples.length; } };
-            return stream;
-          },
-          decodeAsync: async (stream) => {
-            const n = (stream as { samples: number }).samples;
-            fake.decodes.push(n);
-            return { text: fake.reply(n) };
-          },
-        };
-      },
-    },
+/** A response as the service sends it: gzip JSON, and the flag that closes the session. */
+function response(body: unknown, last = false): Uint8Array {
+  const payload = gzipSync(utf8(JSON.stringify(body)));
+  const out = new Uint8Array(8 + payload.length);
+  out.set([0x11, (0x9 << 4) | (last ? 2 : 0), 0x11, 0]);
+  out.set(be32(payload.length), 4);
+  out.set(payload, 8);
+  return out;
+}
+
+/** One session on the service's side: the frames it was sent, and the text it answers with. */
+class TestSocket implements SpeechSocket {
+  readonly sent: Uint8Array[] = [];
+  /** Audio frames sent, the final one included. */
+  audio = 0;
+
+  constructor(
+    private readonly handlers: SocketHandlers,
+    private readonly answer: string | ((frames: number) => string),
+    private readonly partialOf?: (frames: number) => string | null,
+  ) {}
+
+  send(data: Uint8Array): void {
+    this.sent.push(data);
+    // the start request carries the session's format; only audio frames are answered
+    if ((data[1]! >> 4) === 0x1) return;
+    this.audio++;
+    if ((data[1]! & 0x02) !== 0) {
+      const text = typeof this.answer === 'string' ? this.answer : this.answer(this.audio);
+      const utterances = text ? [{ text, definite: true, start_time: 0, end_time: this.audio }] : [];
+      queueMicrotask(() => this.handlers.message(response({ result: { text, utterances } }, true)));
+      return;
+    }
+    const partial = this.partialOf?.(this.audio);
+    if (partial) queueMicrotask(() => this.handlers.message(response({ result: { text: partial, utterances: [{ text: partial, definite: false }] } })));
+  }
+
+  close(): void {}
+}
+
+/** The service the World's recognizer talks to: every session's address, headers and frames. */
+class TestSpeech {
+  readonly urls: string[] = [];
+  readonly headers: Array<Record<string, string>> = [];
+  readonly sockets: TestSocket[] = [];
+
+  constructor(
+    private readonly answer: string | ((frames: number) => string),
+    private readonly partialOf?: (frames: number) => string | null,
+  ) {}
+
+  readonly open: SocketOpen = (url, headers, handlers) => {
+    this.urls.push(url);
+    this.headers.push(headers);
+    const socket = new TestSocket(handlers, this.answer, this.partialOf);
+    this.sockets.push(socket);
+    // the connection comes up by itself, as a live one does
+    queueMicrotask(() => handlers.open());
+    return socket;
   };
-  return fake;
-}
 
-const MODEL = Buffer.from('model');
-const TOKENS = Buffer.from('tokens');
-const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
-/** A small stand-in for the FunASR model, fetched from `url` when not placed beforehand. */
-const modelSpec = (url = 'http://127.0.0.1:9'): ModelSpec => ({
-  id: 'test-model',
-  files: [{ role: 'model', name: 'model.int8.onnx', bytes: MODEL.length, sha256: sha(MODEL) }, { role: 'tokens', name: 'tokens.txt', bytes: TOKENS.length, sha256: sha(TOKENS) }],
-  sources: [(f) => `${url}/${f}`],
-});
-function placeModel(modelsDir: string): void {
-  mkdirSync(join(modelsDir, 'test-model'), { recursive: true });
-  writeFileSync(join(modelsDir, 'test-model', 'model.int8.onnx'), MODEL);
-  writeFileSync(join(modelsDir, 'test-model', 'tokens.txt'), TOKENS);
-}
-/** A small stand-in for the Whisper model, placed in `modelsDir`. */
-function placeWhisper(modelsDir: string): ModelSpec {
-  const files = ['encoder', 'decoder', 'tokens'].map((role) => ({ role, name: `${role}.bin`, body: Buffer.from(role) }));
-  mkdirSync(join(modelsDir, 'test-whisper'), { recursive: true });
-  for (const file of files) writeFileSync(join(modelsDir, 'test-whisper', file.name), file.body);
-  return { id: 'test-whisper', files: files.map(({ role, name, body }) => ({ role, name, bytes: body.length, sha256: sha(body) })), sources: [] };
+  /** The session opened last. */
+  get socket(): TestSocket {
+    return this.sockets.at(-1)!;
+  }
 }
 
 const tone = (ms: number, amp: number) => {
@@ -81,6 +105,9 @@ const tone = (ms: number, amp: number) => {
   return frames;
 };
 
+/** Speech, then the pause that closes the sentence. */
+const sentence = (ms = 900) => [...tone(ms, .3), ...tone(900, 0)];
+
 /** Writes a config patch into the live section, as Core does with a World's persist. */
 const merge = (to: Record<string, unknown>, patch: Record<string, unknown>) => {
   for (const [k, v] of Object.entries(patch)) {
@@ -89,11 +116,14 @@ const merge = (to: Record<string, unknown>, patch: Record<string, unknown>) => {
   }
 };
 
-const platform = process.platform;
+const server = (world: DesktopPetWorld) => world.voiceState().server as { phase: string; url: string; pid: null; detail: string | null };
+const input = (world: DesktopPetWorld) => world.voiceState().input as { mode: MicMode; open: boolean; hotkeyProblem: string | null; hint: string };
+const counts = (world: DesktopPetWorld) => world.voiceState().counts as { utterances: number; delivered: number; dropped: number };
+const call = (world: DesktopPetWorld, method: string, args: unknown[] = []) => world.webUi().invoke!('voice', method, args);
+
 let cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const fn of cleanup.reverse()) await fn();
-  Object.defineProperty(process, 'platform', { value: platform });
   cleanup = [];
 });
 
@@ -110,122 +140,134 @@ function scriptedKey(problem?: string) {
   return { key, watch };
 }
 
-async function setup(text: string | ((samples: number) => string), mode: MicMode = 'always', watch?: ReturnType<typeof scriptedKey>['watch'], language: Language = 'zh', openOnPress = false, loadGate?: Promise<void>) {
-  const asr = fakeFunAsr(text);
-  if (loadGate) asr.beforeLoad = () => loadGate;
+/** The wake word said once: the spotter answers with its keyword on the first frame, and the cooldown keeps it at one. */
+function scriptedWake() {
+  const spotter: WakeSpotter = {
+    createStream: () => ({ acceptWaveform: () => {} }),
+    isReady: () => true,
+    decode: () => {},
+    reset: () => {},
+    getResult: () => ({ keyword: '小可' }),
+  };
+  const load = (): WakeModule => ({ KeywordSpotter: function () { return spotter; } as unknown as new (config: Record<string, unknown>) => WakeSpotter });
+  return { load };
+}
+
+interface Setup {
+  mode?: MicMode;
+  watch?: ReturnType<typeof scriptedKey>['watch'];
+  language?: Language;
+  openOnPress?: boolean;
+  /** The wake word on, with its model's files standing in and `loadWake` as the spotter. */
+  wake?: boolean;
+  loadWake?: () => WakeModule;
+  /** The API Key Core hands over; empty is a deployment that saved none. */
+  key?: string;
+  /** What the service says while the sentence is still being heard. */
+  partial?: (frames: number) => string | null;
+  /** The phase the recognizer is expected to come up in. */
+  phase?: 'running' | 'error';
+}
+
+async function setup(answer: string | ((frames: number) => string), o: Setup = {}) {
+  const speech = new TestSpeech(answer, o.partial);
+  const keys = { value: o.key ?? 'test-key' };
   const cfg = structuredClone(DESKTOP_PET_DEFAULTS);
   Object.assign(cfg, { enabled: true, port: 0 });
   cfg.window.enabled = false;
-  cfg.asr.mic.mode = mode;
-  cfg.asr.mic.openOnPress = openOnPress;
+  cfg.asr.mic.mode = o.mode ?? 'always';
+  cfg.asr.mic.openOnPress = o.openOnPress ?? false;
+  cfg.wake.enabled = o.wake ?? false;
+  if (o.wake) {
+    // the keywords the spotter is built from, in its own tokens; the cooldown keeps a test to one wake
+    cfg.wake.keywords = '▁小 ▁可 :2.0 #0.4 @小可';
+    cfg.wake.cooldownMs = 60_000;
+  }
   const dir = mkdtempSync(join(tmpdir(), 'pet-voice-'));
-  placeModel(join(dir, 'm'));
+  if (o.wake) {
+    const model = join(dir, 'm', KWS_MODEL.id);
+    mkdirSync(model, { recursive: true });
+    for (const role of ['encoder', 'decoder', 'joiner']) writeFileSync(join(model, `${role}-x.onnx`), 'x');
+    writeFileSync(join(model, 'tokens.txt'), '▁小 0\n▁可 1\n');
+  }
+  const host = new FakeHost();
   const world = new DesktopPetWorld({
     cfg, timezone: 'Asia/Shanghai', persist: (patch) => merge(cfg as never, patch as never), runtimesRoot: () => join(dir, 'rt'), modelsDir: () => join(dir, 'm'),
-    watchHotkey: watch, loadSherpa: () => asr.sherpa, funasrModel: modelSpec(), whisperModel: placeWhisper(join(dir, 'm')), language: () => language,
+    watchHotkey: o.watch, language: () => o.language ?? 'zh',
+    doubaoApiKey: () => keys.value, storeDoubaoApiKey: (key) => { keys.value = key; },
+    openSpeechSocket: speech.open,
+    loadWake: o.loadWake,
   });
-  const host = new FakeHost();
   await world.start(host);
   cleanup.push(() => world.stop());
-  await expect.poll(() => (world.voiceState().server as { phase: string }).phase).toBe(loadGate ? 'starting' : 'running');
+  await expect.poll(() => server(world).phase).toBe(o.phase ?? 'running');
   const page = await FakePage.open(world.petUrl.replace(/\/pet$/, ''));
   cleanup.push(() => page.close());
-  return { asr, world, host, page, cfg };
+  return { speech, keys, world, host, page, cfg };
 }
 
 describe('voice input', () => {
-  it.each(['zh', 'fr'] as Language[])('unloads the %s recognition model when disabled and reloads it when enabled', async (language) => {
-    const { cfg, world, page, asr } = await setup('hello', 'always', undefined, language);
-    cfg.asr.enabled = false;
-    await page.next((m) => m.t === 'prefs' && m.mic === false);
-    await expect.poll(() => (world.voiceState().server as { phase: string }).phase).toBe('stopped');
-    cfg.asr.enabled = true;
-    await expect.poll(() => (world.voiceState().server as { phase: string }).phase).toBe('running');
-    expect(asr.configs).toHaveLength(2);
-  });
-
-  it('stops the active engine when the configured engine changes before the stop request', async () => {
+  it('stops the recognizer when voice input is switched off and starts it again when it is switched on', async () => {
     const { cfg, world } = await setup('hello');
-    cfg.asr.engine = 'whisper';
-    await world.webUi().invoke!('voice', 'stop', []);
-    cfg.asr.engine = 'funasr';
-    expect((world.voiceState().server as { phase: string }).phase).toBe('stopped');
-  });
-
-  it('finishes unloading a pending model before a rapid disable and enable starts it again', async () => {
-    let loaded!: () => void;
-    const loadGate = new Promise<void>((resolve) => { loaded = resolve; });
-    const { cfg, world, page, asr } = await setup('hello', 'always', undefined, 'zh', false, loadGate);
-    try {
-      cfg.asr.enabled = false;
-      await page.next((m) => m.t === 'prefs' && (m.voice as { enabled?: boolean })?.enabled === false);
-      cfg.asr.enabled = true;
-      const restarted = world.startVoiceBackend();
-      loaded();
-      await restarted;
-      expect((world.voiceState().server as { phase: string }).phase).toBe('running');
-      expect(asr.configs).toHaveLength(2);
-    } finally { loaded(); }
-  });
-
-  it('closes the system helper when voice input is disabled', async () => {
-    Object.defineProperty(process, 'platform', { value: 'win32' });
-    const cfg = structuredClone(DESKTOP_PET_DEFAULTS);
-    Object.assign(cfg, { enabled: true, port: 0 });
-    cfg.window.enabled = false;
-    cfg.asr.engine = 'system';
-    cfg.asr.mic.mode = 'always';
-    const { spawnImpl, spawned } = fakeSapi({ final: () => 'hello' });
-    const dir = mkdtempSync(join(tmpdir(), 'pet-voice-'));
-    const world = new DesktopPetWorld({ cfg, timezone: 'Asia/Shanghai', persist: () => {}, runtimesRoot: () => join(dir, 'rt'), modelsDir: () => join(dir, 'm'), spawnSystemRecognizer: spawnImpl });
-    await world.start(new FakeHost());
-    cleanup.push(() => world.stop());
-    await expect.poll(() => (world.voiceState().server as { phase: string }).phase).toBe('running');
     cfg.asr.enabled = false;
-    await expect.poll(() => (world.voiceState().server as { phase: string }).phase).toBe('stopped');
-    expect(spawned[0].child.exitCode).toBe(0);
-    expect(world.voiceState().server).toMatchObject({ pid: null });
+    await expect.poll(() => server(world).phase).toBe('stopped');
+    expect(server(world).pid).toBeNull();
+    cfg.asr.enabled = true;
+    await expect.poll(() => server(world).phase).toBe('running');
+  });
+
+  it("takes Doubao's address and Key from the panel, and the next sentence opens a session on the new address with that Key", async () => {
+    const { speech, world, page } = await setup('你好');
+    const saved = await call(world, 'setDoubao', [{ baseUrl: 'wss://asr.test/sauc', key: 'key-2' }]) as { server: { phase: string; url: string }; doubao: { baseUrl: string; keySaved: boolean } };
+    expect(saved.doubao).toMatchObject({ baseUrl: 'wss://asr.test/sauc', keySaved: true });
+    expect(saved.server).toMatchObject({ phase: 'running', url: 'wss://asr.test/sauc' });
+    for (const fr of sentence()) page.audio(fr);
+    await page.next((m) => m.t === 'listen' && m.phase === 'start');
+    await expect.poll(() => speech.urls.length, { timeout: 5000 }).toBe(1);
+    expect(speech.urls[0]).toBe('wss://asr.test/sauc');
+    expect(speech.headers[0]).toMatchObject({ 'X-Api-Key': 'key-2' });
   });
 
   it('turns a spoken utterance into one speech event that wakes', async () => {
-    const { asr, host, page } = await setup('今天天气怎么样');
-    for (const fr of [...tone(900, .3), ...tone(900, 0)]) page.audio(fr);
+    const { speech, host, page } = await setup('今天天气怎么样');
+    for (const fr of sentence()) page.audio(fr);
     await page.next((m) => m.t === 'listen' && m.phase === 'start');
     await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
     expect(host.events[0]).toMatchObject({ type: 'desktop-pet.speech', senderKey: 'desktop-pet.voice', text: '[voice] 伙伴:今天天气怎么样' });
     expect(host.pushOpts[0]).toEqual({ trigger: 'flush' });
     expect((await page.next((m) => m.t === 'listen' && m.phase === 'heard')).text).toBe('今天天气怎么样');
-    // the last decode is the whole utterance: at least the 900 ms spoken
-    expect(asr.decodes.at(-1)).toBeGreaterThanOrEqual(900 * 16);
-    expect(asr.configs[0]).toMatchObject({ modelConfig: { senseVoice: { language: 'zh' }, numThreads: 2 } });
+    // one session per sentence: the live one, on the official address with the shared Key, ended by its own final frame
+    expect(speech.urls).toEqual([SAUC_URL]);
+    expect(speech.headers[0]).toMatchObject({ 'X-Api-Key': 'test-key' });
+    expect(speech.socket.sent.at(-1)![1]! & 0x02).not.toBe(0);
   });
 
   it('a threshold set from the meter applies to the next frame: speech below it is not heard', async () => {
     const { world, host, page } = await setup('不该听见');
     const speech = tone(900, .3);
-    const state = await world.webUi().invoke!('voice', 'setThreshold', [rmsDb(speech[0]) + 3]) as { thresholdDb: number };
-    expect(state.thresholdDb).toBe(rmsDb(speech[0]) + 3);
-    const last = tone(20, .05)[0];
+    const state = await call(world, 'setThreshold', [rmsDb(speech[0]!) + 3]) as { thresholdDb: number };
+    expect(state.thresholdDb).toBe(rmsDb(speech[0]!) + 3);
+    const last = tone(20, .05)[0]!;
     for (const fr of [...speech, ...tone(900, 0), last]) page.audio(fr);
     await expect.poll(() => world.voiceState().level).toBe(rmsDb(last));
-    expect((world.voiceState().counts as { utterances: number }).utterances).toBe(0);
+    expect(counts(world).utterances).toBe(0);
     expect(host.events).toHaveLength(0);
   });
 
   it('drops a known hallucination and tells the page nothing was heard', async () => {
     const { host, page } = await setup('谢谢观看');
-    for (const fr of [...tone(900, .3), ...tone(900, 0)]) page.audio(fr);
+    for (const fr of sentence()) page.audio(fr);
     await page.next((m) => m.t === 'listen' && m.phase === 'none');
     expect(host.events).toHaveLength(0);
   });
 
   it('hold: only audio while the talk key is down counts, and releasing the key ends the utterance', async () => {
     const { key, watch } = scriptedKey();
-    const { host, page, world } = await setup('帮我看看这个', 'hold', watch);
+    const { host, page, world } = await setup('帮我看看这个', { mode: 'hold', watch });
     expect(key.hotkey).toEqual(parseHotkey(DESKTOP_PET_DEFAULTS.asr.mic.hotkey));
     for (const fr of tone(600, .3)) page.audio(fr);
     await new Promise((r) => setTimeout(r, 200));
-    expect((world.voiceState().counts as { utterances: number }).utterances).toBe(0);
+    expect(counts(world).utterances).toBe(0);
     // the quick tap before the held press: the pet perks up before it listens
     key.tap();
     await page.next((m) => m.t === 'listen' && m.phase === 'ready');
@@ -237,12 +279,12 @@ describe('voice input', () => {
     expect(host.events).toHaveLength(0);
     key.press(false);
     await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
-    expect(host.events[0].text).toBe('[voice] 伙伴:帮我看看这个');
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:帮我看看这个');
   });
 
   it('hold: the microphone stays open across a press and release unless it is set to open on press', async () => {
     const { key, watch } = scriptedKey();
-    const { page } = await setup('帮我看看这个', 'hold', watch);
+    const { page } = await setup('帮我看看这个', { mode: 'hold', watch });
     expect(page.init.mic).toBe(true);
     key.press(true);
     key.press(false);
@@ -252,7 +294,7 @@ describe('voice input', () => {
 
   it('hold, open on press: the page opens the microphone from the press until shortly after the release', async () => {
     const { key, watch } = scriptedKey();
-    const { page } = await setup('帮我看看这个', 'hold', watch, 'zh', true);
+    const { page } = await setup('帮我看看这个', { mode: 'hold', watch, openOnPress: true });
     expect(page.init.mic).toBe(false);
     key.press(true);
     await page.next((m) => m.t === 'prefs' && m.mic === true);
@@ -265,7 +307,7 @@ describe('voice input', () => {
 
   it("the listening bubble's cancel drops what was heard, sends nothing and closes the bubble", async () => {
     const { key, watch } = scriptedKey();
-    const { host, page } = await setup('说错了', 'hold', watch);
+    const { host, page } = await setup('说错了', { mode: 'hold', watch });
     key.press(true);
     for (const fr of tone(600, .3)) page.audio(fr);
     await page.next((m) => m.t === 'listen' && m.phase === 'start');
@@ -280,20 +322,20 @@ describe('voice input', () => {
 
   it('a talk key that cannot be read keeps the gate closed', async () => {
     const { watch } = scriptedKey('no keyboard here');
-    const { page, world } = await setup('不该听见', 'toggle', watch);
-    expect(world.voiceState().input).toMatchObject({ mode: 'toggle', hotkeyProblem: 'no keyboard here', open: false });
-    expect((world.voiceState().input as { hint: string }).hint).toContain('no keyboard here');
-    const last = tone(20, .05)[0];
+    const { page, world } = await setup('不该听见', { mode: 'hold', watch });
+    expect(input(world)).toMatchObject({ mode: 'hold', hotkeyProblem: 'no keyboard here', open: false });
+    expect(input(world).hint).toContain('no keyboard here');
+    const last = tone(20, .05)[0]!;
     for (const fr of [...tone(900, .3), ...tone(900, 0), last]) page.audio(fr);
     // frames arrive in order: once the last one is metered, every sentence the others made is counted
     await expect.poll(() => world.voiceState().level).toBe(rmsDb(last));
-    expect((world.voiceState().counts as { utterances: number }).utterances).toBe(0);
+    expect(counts(world).utterances).toBe(0);
   });
 
   it('the typing key is watched only once switched on, and its press opens the typing box', async () => {
     const { key, watch } = scriptedKey();
     // listening without a key: any key watched is the typing key
-    const { page, cfg } = await setup('', 'always', watch);
+    const { page, cfg } = await setup('', { watch });
     expect(key.hotkey).toBeNull();
     cfg.typeKey.enabled = true;
     await expect.poll(() => key.hotkey).not.toBeNull();
@@ -310,134 +352,284 @@ describe('voice input', () => {
     expect(host.events).toHaveLength(0);
     page.send({ t: 'commit' });
     await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
-    expect(host.events[0].text).toBe('[voice] 伙伴:帮我开灯');
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:帮我开灯');
     expect((await page.next((m) => m.t === 'listen' && m.phase === 'heard')).text).toBe('帮我开灯');
   });
 
-  it('toggle: sending the sentence switches the talk key off', async () => {
+  it('hold: the round does not go out while the key is still held', async () => {
     const { key, watch } = scriptedKey();
-    const { host, page, world } = await setup('好了', 'toggle', watch);
-    key.press(true); key.press(false);
-    await page.next((m) => m.t === 'listen' && m.phase === 'start');
-    for (const fr of tone(600, .3)) page.audio(fr);
-    page.send({ t: 'commit' });
-    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
-    expect((world.voiceState().input as { open: boolean }).open).toBe(false);
-  });
-
-  it('the button held down with nothing heard closes the listening bubble and sends nothing', async () => {
-    const { key, watch } = scriptedKey();
-    const { asr, host, page } = await setup('x', 'toggle', watch);
-    key.press(true); key.press(false);
-    await page.next((m) => m.t === 'listen' && m.phase === 'start');
-    page.send({ t: 'commit' });
-    await page.next((m) => m.t === 'listen' && m.phase === 'none');
-    expect(asr.decodes).toHaveLength(0);
-    expect(host.events).toHaveLength(0);
-  });
-
-  it('system engine: the bubble shows the sentence while it is spoken, then the event carries the final text', async () => {
-    Object.defineProperty(process, 'platform', { value: 'win32' });
-    const cfg = structuredClone(DESKTOP_PET_DEFAULTS);
-    Object.assign(cfg, { enabled: true, port: 0 });
-    cfg.window.enabled = false;
-    cfg.asr.engine = 'system';
-    cfg.asr.mic.mode = 'always';
-    // one character per 100 ms of audio heard so far; the final text settles on the whole sentence
-    const { spawnImpl, spawned } = fakeSapi({ partial: (n) => '听'.repeat(Math.floor(n / 3200)) || null, final: () => '听清楚了' });
-    const dir = mkdtempSync(join(tmpdir(), 'pet-voice-'));
-    const world = new DesktopPetWorld({ cfg, timezone: 'Asia/Shanghai', persist: () => {}, runtimesRoot: () => join(dir, 'rt'), modelsDir: () => join(dir, 'm'), spawnSystemRecognizer: spawnImpl });
-    const host = new FakeHost();
-    await world.start(host);
-    cleanup.push(() => world.stop());
-    await expect.poll(() => (world.voiceState().server as { phase: string }).phase).toBe('running');
-    const page = await FakePage.open(world.petUrl.replace(/\/pet$/, ''));
-    cleanup.push(() => page.close());
-
-    for (const fr of tone(600, .3)) page.audio(fr);
-    const live = await page.next((m) => m.t === 'listen' && m.phase === 'partial' && typeof m.interim === 'string' && m.interim.length >= 3);
-    expect(live.text).toBe('');
-    expect(host.events).toHaveLength(0);
-    for (const fr of tone(900, 0)) page.audio(fr);
-    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
-    expect(host.events[0].text).toBe('[voice] 伙伴:听清楚了');
-    expect((await page.next((m) => m.t === 'listen' && m.phase === 'heard')).text).toBe('听清楚了');
-    // one streamed sentence, not a second pass over the finished audio
-    expect(spawned[0].lines.filter((l) => l.startsWith('B '))).toHaveLength(1);
-  });
-
-  it('funasr: the bubble shows what is heard while the sentence is spoken', async () => {
-    // one character per 100 ms of audio decoded so far
-    const { host, page } = await setup((n) => '听'.repeat(Math.floor(n / 1600)));
-    for (const fr of tone(1400, .3)) page.audio(fr);
-    const live = await page.next((m) => m.t === 'listen' && m.phase === 'partial' && typeof m.interim === 'string' && m.interim.length >= 3);
-    expect(live.text).toBe('');
-    expect(host.events).toHaveLength(0);
-    for (const fr of tone(900, 0)) page.audio(fr);
-    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
-    expect(host.events[0].text.length).toBeGreaterThan('[voice] 伙伴:'.length + 13);
-  });
-
-  it('whisper: an app language SenseVoice does not hear goes to Whisper in that language, decoded once when the sentence ends', async () => {
-    const { asr, host, page } = await setup('Quelle heure est-il ?', 'always', undefined, 'fr');
-    for (const fr of tone(1400, .3)) page.audio(fr);
-    await page.next((m) => m.t === 'listen' && m.phase === 'start');
-    await new Promise((r) => setTimeout(r, 300));
-    expect(asr.decodes).toHaveLength(0);
-    for (const fr of tone(900, 0)) page.audio(fr);
-    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
-    expect(host.events[0].text).toContain('Quelle heure est-il ?');
-    expect(asr.decodes).toHaveLength(1);
-    expect(asr.configs[0]).toMatchObject({ modelConfig: { whisper: { language: 'fr', task: 'transcribe' } } });
-  });
-
-  it('whisper: a talk key held over silence is not decoded and sends nothing', async () => {
-    const { key, watch } = scriptedKey();
-    const { asr, host, page } = await setup('Повтори', 'hold', watch, 'ru');
+    const { cfg, host, page } = await setup('说到一半', { mode: 'hold', watch });
+    // a held key arms no clock, so its length cannot send anything
+    cfg.asr.mic.roundSeconds = 1;
     key.press(true);
     await page.next((m) => m.t === 'listen' && m.phase === 'start');
-    for (const fr of tone(800, 0)) page.audio(fr);
-    await new Promise((r) => setTimeout(r, 200));
+    for (const fr of tone(700, .3)) page.audio(fr);
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(host.events).toHaveLength(0);
     key.press(false);
-    await page.next((m) => m.t === 'listen' && m.phase === 'none');
-    expect(asr.decodes).toHaveLength(0);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:说到一半');
+  });
+
+  it('hold: letting go ends the round, and what is said next opens the next one', async () => {
+    const { key, watch } = scriptedKey();
+    const { host, page, world } = await setup('说到一半', { mode: 'hold', watch });
+    key.press(true);
+    await page.next((m) => m.t === 'listen' && m.phase === 'start');
+    for (const fr of tone(700, .3)) page.audio(fr);
+    // the frames are metered before the key comes up: letting go flushes what was heard
+    await expect.poll(() => world.voiceState().level).toBeGreaterThan(-30);
+    key.press(false);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:说到一半');
+    expect((await page.next((m) => m.t === 'listen' && m.phase === 'heard')).text).toBe('说到一半');
+    // the next press hears a round of its own
+    key.press(true);
+    await page.next((m) => m.t === 'listen' && m.phase === 'start');
+    for (const fr of tone(400, .3)) page.audio(fr);
+    await new Promise((r) => setTimeout(r, 300));
+    key.press(false);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(2);
+    expect(counts(world).utterances).toBe(2);
+  });
+
+  it('listening all the time: speech with no pause in it still goes out at the round length', async () => {
+    const { cfg, host, page } = await setup('一口气说完');
+    cfg.asr.mic.roundSeconds = 1;
+    // no closing pause ever comes: without the clock this waits for one that never arrives
+    for (const fr of tone(1500, .3)) page.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:一口气说完');
+  });
+
+  it('listening all the time: the round after one that ran its length gets a clock of its own', async () => {
+    let said = 0;
+    const { cfg, host, page } = await setup(() => (++said === 1 ? '头一句' : '下一句'));
+    cfg.asr.mic.roundSeconds = 1;
+    for (const fr of tone(2000, .3)) page.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:头一句');
+    // listening goes on in a new round: this one is sent by its own clock too, not by a pause that never comes
+    for (const fr of tone(2000, .3)) page.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(2);
+    expect(host.events[1]!.text).toBe('[voice] 伙伴:下一句');
+  });
+
+  it('the panel writes the round length and the state carries it back', async () => {
+    const { world } = await setup('x');
+    const state = await call(world, 'setMic', [{ roundSeconds: 90 }]) as { input: { roundSeconds: number } };
+    expect(state.input.roundSeconds).toBe(90);
+  });
+
+  it('a length written from the panel restarts the clock of the round being heard', async () => {
+    const { host, page, world } = await setup('改一下长度');
+    for (const fr of tone(600, .3)) page.audio(fr);
+    await expect.poll(() => world.voiceState().level).toBeGreaterThan(-30);
+    // the round opened on the default minute, which has barely begun
+    const state = await call(world, 'setMic', [{ roundSeconds: 5 }]) as { input: { roundSeconds: number } };
+    expect(state.input.roundSeconds).toBe(5);
+    // five seconds from the change, not the minute the round opened on
+    await expect.poll(() => host.events.length, { timeout: 9000 }).toBe(1);
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:改一下长度');
+  });
+
+  it('a switch to a held key takes the clock off the round being heard', async () => {
+    const { watch } = scriptedKey();
+    const { host, page, world } = await setup('说到一半', { watch });
+    await call(world, 'setMic', [{ roundSeconds: 5 }]);
+    for (const fr of tone(600, .3)) page.audio(fr);
+    await expect.poll(() => world.voiceState().level).toBeGreaterThan(-30);
+    // the round is on a five-second clock; a held key ends rounds on release instead
+    await call(world, 'setMic', [{ mode: 'hold' }]);
+    await new Promise((r) => setTimeout(r, 6000));
     expect(host.events).toHaveLength(0);
   });
 
-  it('funasr without its model says so, and the download starts it', async () => {
-    const MODEL_FILES: Record<string, Buffer> = { 'model.int8.onnx': Buffer.from('model'), 'tokens.txt': Buffer.from('tokens') };
-    const server = createServer((req, res) => {
-      const body = MODEL_FILES[(req.url ?? '').slice(1)];
-      if (!body) { res.writeHead(404).end(); return; }
-      res.writeHead(200, { 'content-length': String(body.length) }).end(body);
-    });
-    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
-    cleanup.push(() => new Promise((r) => server.close(() => r())));
-    const asr = fakeFunAsr('你好');
-    const cfg = structuredClone(DESKTOP_PET_DEFAULTS);
-    Object.assign(cfg, { enabled: true, port: 0 });
-    cfg.window.enabled = false;
-    const dir = mkdtempSync(join(tmpdir(), 'pet-voice-'));
-    const world = new DesktopPetWorld({
-      cfg, timezone: 'Asia/Shanghai', persist: () => {}, runtimesRoot: () => join(dir, 'rt'), modelsDir: () => join(dir, 'm'),
-      loadSherpa: () => asr.sherpa, funasrModel: modelSpec(`http://127.0.0.1:${(server.address() as { port: number }).port}`),
-    });
-    await world.start(new FakeHost());
-    cleanup.push(() => world.stop());
-    await expect.poll(() => (world.voiceState().server as { detail: string | null }).detail).toContain(petText('zh').voice.modelMissing(0));
-    expect((world.voiceState().server as { phase: string }).phase).toBe('stopped');
-    expect((world.voiceState().model as { phase: string }).phase).toBe('absent');
-    await world.installVoice();
-    expect((world.voiceState().model as { phase: string }).phase).toBe('ready');
-    expect((world.voiceState().server as { phase: string }).phase).toBe('running');
-    expect(asr.configs).toHaveLength(1);
+  it('the word that woke the pet is taken off the front of what was said', async () => {
+    const { watch } = scriptedKey();
+    const { load } = scriptedWake();
+    const { host, page } = await setup('小可今天天气怎么样', { mode: 'hold', watch, wake: true, loadWake: load });
+    for (const fr of sentence(600)) page.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    // the name was said to call it, not asked of it
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:今天天气怎么样');
+  });
+
+  it('a sentence that is only the word that woke it asks nothing', async () => {
+    const { watch } = scriptedKey();
+    const { load } = scriptedWake();
+    const { host, page, world } = await setup('小可', { mode: 'hold', watch, wake: true, loadWake: load });
+    for (const fr of sentence(600)) page.audio(fr);
+    await page.next((m) => m.t === 'listen' && m.phase === 'none');
+    expect(counts(world).dropped).toBe(1);
+    expect(host.events).toHaveLength(0);
+  });
+
+  it('hold: the round a wake word opens runs to the round length', async () => {
+    const { watch } = scriptedKey();
+    const { load } = scriptedWake();
+    const { host, page, world } = await setup('叫醒了', { mode: 'hold', watch, wake: true, loadWake: load });
+    await call(world, 'setMic', [{ roundSeconds: 5 }]);
+    // the word opens a round; the speech after it never pauses
+    for (const fr of tone(400, .3)) page.audio(fr);
+    await page.next((m) => m.t === 'listen' && m.phase === 'start');
+    for (const fr of tone(2000, .3)) page.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 9000 }).toBe(1);
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:叫醒了');
+  });
+
+  it('hold: the talk key takes the round a wake word opened off its clock', async () => {
+    const { key, watch } = scriptedKey();
+    const { load } = scriptedWake();
+    const { host, page, world } = await setup('说到一半', { mode: 'hold', watch, wake: true, loadWake: load });
+    await call(world, 'setMic', [{ roundSeconds: 5 }]);
+    for (const fr of tone(400, .3)) page.audio(fr);
+    await page.next((m) => m.t === 'listen' && m.phase === 'start');
+    // the round the word opened is on a five-second clock; from the press it ends on release
+    key.press(true);
+    for (const fr of tone(2000, .3)) page.audio(fr);
+    await new Promise((r) => setTimeout(r, 6000));
+    expect(host.events).toHaveLength(0);
+    key.press(false);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:说到一半');
+  });
+
+  it('a page that connects while the word is being waited for is told so', async () => {
+    const { watch } = scriptedKey();
+    const { load } = scriptedWake();
+    const { world, page } = await setup('不该听见', { mode: 'hold', watch, wake: true, loadWake: load });
+    await page.next((m) => m.t === 'wake' && m.armed === true);
+    // a reloaded page is a page that has been told nothing: it is told again
+    await page.close();
+    const again = await FakePage.open(world.petUrl.replace(/\/pet$/, ''));
+    await again.next((m) => m.t === 'wake' && m.armed === true);
+    await again.close();
+  });
+
+  it('hold: the window a wake word opens runs out, and the talk key after it is heard on its own', async () => {
+    const { key, watch } = scriptedKey();
+    const { load } = scriptedWake();
+    const { host, page, world } = await setup('小可帮我看看', { mode: 'hold', watch, wake: true, loadWake: load });
+    const quiet = tone(20, 0)[0]!;
+    page.audio(quiet);
+    await page.next((m) => m.t === 'listen' && m.phase === 'start');
+    // the word opened a window: the pet is no longer merely waiting for it
+    await page.next((m) => m.t === 'wake' && m.armed === false);
+    // a microphone keeps sending silence, and ten seconds of it outlast the window
+    const seen = page.messages.length;
+    const until = Date.now() + 10_600;
+    while (Date.now() < until) { page.audio(quiet); await new Promise((r) => setTimeout(r, 20)); }
+    // the window is over: the word is waited for again
+    await expect.poll(() => page.messages.slice(seen).some((m) => m.t === 'wake' && m.armed === true), { timeout: 4000 }).toBe(true);
+    // and the key's sentence is the person's: the word at its front was said to the pet, not by a wake still open
+    key.press(true);
+    for (const fr of tone(700, .3)) page.audio(fr);
+    await page.next((m) => m.t === 'listen' && m.phase === 'start');
+    await new Promise((r) => setTimeout(r, 200));
+    key.press(false);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:小可帮我看看');
+  });
+
+  it('switching voice input off drops the round it was hearing instead of leaving the bubble open', async () => {
+    const { cfg, host, page, world } = await setup('说到一半');
+    for (const fr of tone(600, .3)) page.audio(fr);
+    await page.next((m) => m.t === 'listen' && m.phase === 'start');
+    cfg.asr.enabled = false;
+    await page.next((m) => m.t === 'listen' && m.phase === 'none');
+    await new Promise((r) => setTimeout(r, 400));
+    // the words heard so far were never transcribed: the round went with the recognizer
+    expect(counts(world).utterances).toBe(0);
+    expect(host.events).toHaveLength(0);
+  });
+
+  it('the key held with nothing heard closes the listening bubble and sends nothing', async () => {
+    const { key, watch } = scriptedKey();
+    const { speech, host, page } = await setup('x', { mode: 'hold', watch });
+    key.press(true);
+    await page.next((m) => m.t === 'listen' && m.phase === 'start');
+    key.press(false);
+    await page.next((m) => m.t === 'listen' && m.phase === 'none');
+    expect(speech.sockets).toHaveLength(0);
+    expect(host.events).toHaveLength(0);
+  });
+
+  it('the bubble shows what is heard while the sentence is spoken, then the event carries the final text', async () => {
+    // one character per 200 ms frame the service has heard
+    const { host, page } = await setup('听清楚了', { partial: (frames) => '听'.repeat(frames) });
+    for (const fr of tone(1400, .3)) page.audio(fr);
+    const live = await page.next((m) => m.t === 'listen' && m.phase === 'partial' && typeof m.interim === 'string' && m.interim.length >= 3);
+    expect(live.text).toBe('');
+    expect(host.events).toHaveLength(0);
+    for (const fr of tone(900, 0)) page.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    expect(host.events[0]!.text).toBe('[voice] 伙伴:听清楚了');
+    expect((await page.next((m) => m.t === 'listen' && m.phase === 'heard')).text).toBe('听清楚了');
+  });
+
+  it('without an API Key the recognizer says so, and a Key saved from the panel starts it', async () => {
+    const { speech, world } = await setup('你好', { key: '', phase: 'error' });
+    expect(server(world)).toMatchObject({ phase: 'error', detail: petText('zh').doubao.noKey, pid: null });
+    expect(world.voiceState().doubao).toMatchObject({ keySaved: false });
+    expect(speech.sockets).toHaveLength(0);
+    const saved = await call(world, 'setDoubao', [{ key: 'key-1' }]) as { server: { phase: string }; doubao: { keySaved: boolean } };
+    expect(saved.doubao.keySaved).toBe(true);
+    expect(saved.server.phase).toBe('running');
   });
 
   it('ignores quiet input', async () => {
-    const { asr, page, world } = await setup('x');
+    const { speech, page, world } = await setup('x');
     for (const fr of tone(1500, .002)) page.audio(fr);
     await new Promise((r) => setTimeout(r, 400));
-    expect(asr.decodes).toHaveLength(0);
-    expect((world.voiceState().counts as { utterances: number }).utterances).toBe(0);
+    expect(speech.sockets).toHaveLength(0);
+    expect(counts(world).utterances).toBe(0);
+  });
+
+  it('always: the reply being read out is not heard back as the person\'s words', async () => {
+    const { cfg, speech, host, page, world } = await setup('你好');
+    // reading turned on: the World hands the reply to the page as it is said
+    cfg.tts.enabled = true;
+    for (const fr of sentence()) page.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    await world.tools().find((t) => t.name === 'pet_say')!.handler({ script: '我在听。' }, { role: 'main', log: host.log });
+    await page.next((m) => m.t === 'speak');
+    // the microphone hears the speaker too: Coo's own voice is not the person's and asks nothing
+    for (const fr of sentence()) page.audio(fr);
+    await new Promise((r) => setTimeout(r, 800));
+    expect(speech.urls).toHaveLength(1);
+    expect(host.events).toHaveLength(1);
+    // nor does it cut the reading short
+    expect(page.messages.some((m) => m.t === 'speak-stop')).toBe(false);
+  });
+
+  it('always: a reply the page says it played leaves the listening able to hear again', async () => {
+    const { cfg, host, page, world } = await setup('你好');
+    cfg.tts.enabled = true;
+    for (const fr of sentence()) page.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    await world.tools().find((t) => t.name === 'pet_say')!.handler({ script: '我在听。' }, { role: 'main', log: host.log });
+    const speak = await page.next((m) => m.t === 'speak');
+    // the reply played out, or was stopped: the page is done with it either way
+    page.send({ t: 'spoke', id: speak.id });
+    for (const fr of sentence()) page.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(2);
+    expect(host.events[1]!.text).toBe('[voice] 伙伴:你好');
+  });
+
+  it('always: a page gone while it was reading leaves the listening able to hear again', async () => {
+    const { cfg, host, page, world } = await setup('你好');
+    cfg.tts.enabled = true;
+    for (const fr of sentence()) page.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    await world.tools().find((t) => t.name === 'pet_say')!.handler({ script: '我在听。' }, { role: 'main', log: host.log });
+    await page.next((m) => m.t === 'speak');
+    // the page reloads before it played the reply out: nothing will report that end
+    await page.close();
+    const again = await FakePage.open(world.petUrl.replace(/\/pet$/, ''));
+    cleanup.push(() => again.close());
+    for (const fr of sentence()) again.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(2);
+    expect(host.events[1]!.text).toBe('[voice] 伙伴:你好');
   });
 });

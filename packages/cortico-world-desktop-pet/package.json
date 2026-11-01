@@ -2,7 +2,7 @@
   "name": "cortico-world-desktop-pet",
   "version": "0.2.0",
   "type": "module",
-  "description": "Cortico World: a desktop pet that talks in bubbles, asks with options, walks, emotes, hears you through FunASR's SenseVoice or Whisper on sherpa-onnx, and can operate the computer (screenshots, mouse, keyboard and windows), yielding whenever you touch the machine",
+  "description": "Cortico World: a desktop pet that talks in bubbles, asks with options, walks, emotes, hears you through Doubao's streaming recognition with an on-device wake word, and can operate the computer (screenshots, mouse, keyboard and windows), yielding whenever you touch the machine",
   "author": "Pal AI Lab",
   "license": "AGPL-3.0-or-later",
   "repository": {
@@ -18,8 +18,6 @@
     "cortico-world",
     "cortico",
     "desktop-pet",
-    "funasr",
-    "whisper",
     "computer-use",
     "desktop-automation"
   ],

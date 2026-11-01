@@ -42,7 +42,7 @@ Coopanion 是一个桌宠。桌宠 **Coo** 待在屏幕底边，可以用气泡�
 ## 功能
 
 - **多家模型**：DeepSeek、通义千问、Kimi、智谱 GLM、豆包、MiniMax、阶跃星辰、百度千帆、OpenRouter、OpenAI、Anthropic、Gemini、xAI。选一家，贴上 API Key 就能用；也可以登录 ChatGPT 账号，使用它的 ChatGPT 套餐。
-- **聊天**：按说话键说话，或者打字，Coo 在气泡里回复。语音在本机用 FunASR 或 Whisper 识别，也可以走豆包流式识别；回复可以用豆包朗读成声音。
+- **聊天**：按说话键说话，或者打字，Coo 在气泡里回复。语音走豆包的流式识别，回复可以用豆包朗读成声音。
 - **记忆**：记得聊过的内容，也知道你戳了它、摸了它的头。它对你的了解写在工作区的 `PARTNER.md`，工作区每次改动都记成一个版本（Windows 版自带 git，macOS 和 Linux 要系统里装有 git）。
 - **操作电脑**：点按钮、打字、切窗口。动手前先问你。
 - **状态气泡**：想事情、看文件、搜索、写入、操作电脑时，头顶用小图标和动画显示在做什么。
@@ -58,7 +58,7 @@ Coopanion 是一个桌宠。桌宠 **Coo** 待在屏幕底边，可以用气泡�
 
 需要：
 
-- Windows 10 / 11（64 位）、macOS 13 及以上（Apple 芯片和 Intel 都可以），或 64 位 Linux 桌面（X11，或 Wayland 下的 XWayland；语音识别要 glibc 2.32 及以上，即 Ubuntu 22.04、Debian 12 起）；
+- Windows 10 / 11（64 位）、macOS 13 及以上（Apple 芯片和 Intel 都可以），或 64 位 Linux 桌面（X11，或 Wayland 下的 XWayland；唤醒词要 glibc 2.32 及以上，即 Ubuntu 22.04、Debian 12 起）；
 - 一家模型服务的 API Key，按用量付费（见[费用与隐私](#费用与隐私)），或者一个有套餐的 ChatGPT 账号。
 
 安装不需要管理员权限。
@@ -95,7 +95,7 @@ Coopanion 是一个桌宠。桌宠 **Coo** 待在屏幕底边，可以用气泡�
 ## 快速上手
 
 1. **启动**：Coo 落到屏幕底边，任务栏（Mac 是菜单栏，Linux 是状态栏）多出一个图标，不弹窗口。
-2. **引导**：Coo 在气泡里带你完成设置：怎么称呼你、Coo 的性子、走动频率、用哪家模型服务，以及下载语音识别模型（从 ModelScope 下载；FunASR 约 230 MB，应用语言是法、德、西、葡、意、俄语时是 Whisper，约 360 MB）。点气泡上的 × 可以结束引导，在「开始」页点「使用向导」重来。引导结束后，可以直接和 Coo 商量它的性格和说话方式，它能自己把人设写进提示词。
+2. **引导**：Coo 在气泡里带你完成设置：怎么称呼你、Coo 的性子、走动频率、用哪家模型服务，以及还没存时填上识别和朗读共用的豆包 API Key。点气泡上的 × 可以结束引导，在「开始」页点「使用向导」重来。引导结束后，可以直接和 Coo 商量它的性格和说话方式，它能自己把人设写进提示词。
 3. **说第一句话**：快速按一下**左 Alt**（Mac 是**左 Option**），紧接着按住，说「你好」，松开发送。询问麦克风权限时选允许。
 
 <details>
@@ -130,8 +130,8 @@ Coopanion 是一个桌宠。桌宠 **Coo** 待在屏幕底边，可以用气泡�
 
 ### 说话与互动
 
-- **语音**：快速按一下左 Alt，紧接着按住说话，松开算一句。说话键、麦克风和收音方式（按住说 / 按一下开关 / 一直听）在「语音」页修改。识别默认在本机做（FunASR 或 Whisper），也可以在那里选豆包流式识别或 OpenAI 兼容的转写接口，每句录音会发送给那个服务。麦克风选「系统默认」时，改系统的默认输入设备会自动跟过去，不用重启 Coopanion。开麦后 Coo 的身体会亮：还没开口时很淡，说话时随你的声音变亮，想答案和读答案时继续亮；一句话没识别出来或朗读中断时会闪一下红色。
-- **朗读**：在「语音」页打开「朗读回复」并填好豆包 API Key 后，用语音问的那一轮回答会被读出来，打字问的不读；再开口说话、点气泡或打字都会停下。
+- **语音**：快速按一下左 Alt，紧接着按住说话，松开算一句。说话键、麦克风和收音方式（按住说 / 一直听）在「语音」页修改。每句都送给豆包的流式识别，用之前要在那一页填豆包 API Key，朗读也用这把。一直收音和叫名字按「语音」页的「每轮最长」分轮，默认 60 秒：到点先把听到的话送出去，收音不停，后面的话接着算下一轮，一直不停地说也会按时送到；按住说话键时松开就算这一轮结束。麦克风选「系统默认」时，改系统的默认输入设备会自动跟过去，不用重启 Coopanion。开麦后 Coo 的身体会亮：还没开口时很淡，说话时随你的声音变亮，想答案和读答案时继续亮；一句话没识别出来或朗读中断时会闪一下红色。
+- **朗读**：在「语音」页打开「朗读回复」并填好豆包 API Key 后，用语音问的那一轮回答会被读出来，打字问的不读。一轮里有多段气泡时，按说出的顺序一段接一段读完；读的时候 Coo 的光和嘴跟着声音走。再开口说话、点气泡或打字都会停下。
 - **唤醒词**：「语音」页的「唤醒词」一节可以填唤醒词，之后对着麦克风说它就让 Coo 开始听，不必按说话键。识别在本机的模型上做，录音不上传；用之前先在那一节下载模型。词按模型的拼音写，声母和韵母用空格隔开，`@` 之后是给人看的词，例如 `x iǎo k ě @小可`。等这个词的时候，Coo 身形的光会一圈圈往外散；听到你开口才换成亮起的呼吸。
 - **打字**：鼠标停在 Coo 身上，点旁边的气泡按钮。在「习惯」页打开「打字键」后，在任何窗口里按这个键也能打开打字框（默认双击左 Ctrl）。打字框里可以粘贴图片，最多 4 张。
 - **气泡**：鼠标停在 Coo 的气泡上时，气泡不会收起；移开后接着计时。
@@ -166,7 +166,7 @@ Windows、macOS 和 Linux（deb、AppImage）的标题栏整条使用统一的�
 | 开始       | 连接模型、显示或隐藏桌宠、界面配色、重看引导、暂停 / 继续                                                 |
 | 习惯       | 语言、你的称呼和 Coo 的名字、使用统计、走动、回应模式、打字键、显示尺寸、音效与说话声、电脑操作、OBS 画面 |
 | 装扮       | 形象、配色和配件；导入或卸载形象包                                                                        |
-| 语音       | 识别引擎或转写接口、豆包 Key、模型下载、说话键、麦克风、收音方式、说话门槛、朗读回复、唤醒词             |
+| 语音       | 识别服务与豆包 Key、说话键、麦克风、收音方式、说话门槛、朗读回复、唤醒词             |
 | 系统提示词 | Coo 的系统提示词，人设在「CONSTITUTION」一段                                                              |
 | 用量与成本 | 每天的 token 用量和花费                                                                                   |
 | 对话       | 当前对话的记录，以及 Coo 发的图片                                                                         |
@@ -184,10 +184,10 @@ Windows、macOS 和 Linux（deb、AppImage）的标题栏整条使用统一的�
 
 - **费用**：Coopanion 免费。聊天的费用由你选的模型服务按用量收取，可在「用量与成本」页查看（内置价目的有 DeepSeek、OpenAI、Anthropic、Gemini 付费档、xAI）。登录 ChatGPT 时，请求计入 ChatGPT 套餐，不显示费用。
 - **发给模型服务的内容**：你说的话、打的字、和 Coo 的互动，以及操作电脑时的截图。只发给你配置的那一家。
-- **留在本机的内容**：API Key 和 ChatGPT 的登录状态、记忆、对话记录、设置、日志。语音默认在本机识别，只把识别出的文字发出去；在「语音」页选了豆包或 OpenAI 兼容的转写接口时，每句录音发送给那个服务。打开朗读时，要读的文字和合成好的声音在豆包之间往返；唤醒词只用本机下载的模型识别。
+- **留在本机的内容**：API Key 和 ChatGPT 的登录状态、记忆、对话记录、设置、日志。识别走豆包的流式识别，每句录音发送给火山引擎；打开朗读时，要读的文字和合成好的声音也在豆包之间往返；唤醒词只用本机下载的模型识别，录音不上传。
 - **桌宠本地服务**：浏览器写请求和 WebSocket 连接必须来自桌宠服务自己的 HTTP 源（含端口）。桌宠窗口通过启动时交给宿主的随机凭据验证身份。
 - **匿名使用统计**：发到 `survey.palailab.org`，只有使用次数、时长、设置和随机生成的安装编号，不含对话、截图、Key 和文件。字段见 [docs/TELEMETRY.md](docs/TELEMETRY.md)，可在「习惯」页关闭。
-- **其他联网**：向 GitHub 查询新版本（Windows 版和 AppImage 在后台定时查询，Mac 版和 deb 在打开设置窗口时查询）；扩展页访问 npm 与 GitHub 上的官方扩展索引，投票和评论访问 GitHub；下载语音模型时访问 ModelScope（失败时用 Hugging Face），下载唤醒词模型时访问 GitHub；识别走豆包或打开朗读时访问火山引擎。
+- **其他联网**：向 GitHub 查询新版本（Windows 版和 AppImage 在后台定时查询，Mac 版和 deb 在打开设置窗口时查询）；扩展页访问 npm 与 GitHub 上的官方扩展索引，投票和评论访问 GitHub；下载唤醒词模型时访问 GitHub；识别走豆包、打开朗读时访问火山引擎。
 
 ## 数据与卸载
 
@@ -197,7 +197,7 @@ Windows、macOS 和 Linux（deb、AppImage）的标题栏整条使用统一的�
 | macOS   | `~/Library/Application Support/Coopanion` | 把「应用程序」里的 Coopanion 拖进废纸篓                      |
 | Linux   | `~/.config/Coopanion`                     | deb：`sudo apt remove coopanion`；AppImage：删除文件         |
 
-卸载不会删除数据，重装后记忆和设置还在。不再需要时，手动删掉数据目录（Windows 上删整个安装目录）。数据目录里，`home` 是记忆、对话记录、设置和 API Key，`home/models` 是语音模型，`extensions` 是扩展，`logs` 是日志。
+卸载不会删除数据，重装后记忆和设置还在。不再需要时，手动删掉数据目录（Windows 上删整个安装目录）。数据目录里，`home` 是记忆、对话记录、设置和 API Key，`home/models` 是唤醒词模型，`extensions` 是扩展，`logs` 是日志。
 
 Windows 上，重装到新目录后启动时会询问：继承之前使用的数据，还是新建一只。
 
@@ -222,7 +222,7 @@ Windows 上，重装到新目录后启动时会询问：继承之前使用的数
 
 - 确认 Coo 身旁的麦克风按钮没有被划掉；
 - 先快速按一下左 Alt，再按住（两下间隔太久不算）；
-- 「语音」页显示识别服务就绪（提示模型未下载就点「下载」），说话时电平条会跳动；用唤醒词时那一节显示它在听；
+- 「语音」页的识别服务显示「就绪」（缺 Key 时那一行写明），说话时电平条会跳动；用唤醒词时那一节显示它在听；
 - Windows：设置 → 隐私和安全性 → 麦克风，允许桌面应用使用麦克风；
 - Mac：「系统设置 → 隐私与安全性」里给 Coopanion 打开「麦克风」和「输入监控」，改完重启。
 
@@ -274,4 +274,4 @@ Coopanion 用 [Cortico](https://github.com/Pal-AI-Lab/Cortico) 组装：Cortico 
 
 [AGPL-3.0-or-later](LICENSE)，按第 7 条附加许可：允许与 Steam 版加载的 Steamworks API 库链接。0.1.10 及之前发布的版本是 MIT。框架 Cortico 是 MIT，以子模块随附。提 PR 见 [CONTRIBUTING.md](CONTRIBUTING.md)，首次提交需要签[贡献者许可协议](CLA.md)。
 
-DeepSeek 大肥鱼形象（`packages/cortico-world-desktop-pet/web/whale/` 的贴图）不在 AGPL 授权范围内，来源与各家标志的说明见[桌宠 World 的第三方声明](packages/cortico-world-desktop-pet/THIRD_PARTY_NOTICES.md)。随附或运行时下载的第三方组件：Electron（MIT）、Cortico（MIT）、sherpa-onnx（Apache-2.0）、FunASR 的 SenseVoiceSmall 模型（[FunASR 模型开源协议](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)，用时下载）、OpenAI 的 Whisper small 模型（MIT，用时下载）、koffi（MIT）、jpeg-js（BSD-3-Clause）、pnpm（MIT）；各家模型服务的标志取自 [lobe-icons](https://github.com/lobehub/lobe-icons)（MIT，标志归各自公司所有，只用于标明服务）。
+DeepSeek 大肥鱼形象（`packages/cortico-world-desktop-pet/web/whale/` 的贴图）不在 AGPL 授权范围内，来源与各家标志的说明见[桌宠 World 的第三方声明](packages/cortico-world-desktop-pet/THIRD_PARTY_NOTICES.md)。随附或运行时下载的第三方组件：Electron（MIT）、Cortico（MIT）、sherpa-onnx（Apache-2.0，只跑唤醒词）、sherpa-onnx 的关键词模型（Apache-2.0，用时下载）、koffi（MIT）、jpeg-js（BSD-3-Clause）、pnpm（MIT）；各家模型服务的标志取自 [lobe-icons](https://github.com/lobehub/lobe-icons)（MIT，标志归各自公司所有，只用于标明服务）。

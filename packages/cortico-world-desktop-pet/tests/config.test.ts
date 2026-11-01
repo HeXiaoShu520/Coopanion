@@ -1,27 +1,6 @@
-/** config.ts: which recognizer voice input uses, and how the self-adjustment and touch settings read. */
+/** config.ts: how the self-adjustment and touch settings read. */
 import { describe, expect, it } from 'vitest';
-import { SELF_DEFAULT, asrEngineFor, directSettings, selfAdjustMode, touchWakes } from '../src/config.ts';
-
-describe('asrEngineFor', () => {
-  it('unset, picks SenseVoice for the languages it hears and Whisper for the other app languages', () => {
-    for (const language of ['zh', 'zh-Hant', 'en', 'ja', 'ko']) expect(asrEngineFor('', language, true)).toBe('funasr');
-    for (const language of ['fr', 'de', 'es-419', 'pt-BR', 'it', 'ru']) expect(asrEngineFor('', language, true)).toBe('whisper');
-  });
-
-  it('keeps a chosen engine; system only where Windows has its recognizer, the language picks elsewhere', () => {
-    expect(asrEngineFor('whisper', 'zh', false)).toBe('whisper');
-    expect(asrEngineFor('funasr', 'fr', false)).toBe('funasr');
-    expect(asrEngineFor('system', 'fr', true)).toBe('system');
-    expect(asrEngineFor('system', 'fr', false)).toBe('whisper');
-    expect(asrEngineFor('system', 'ja', false)).toBe('funasr');
-    expect(asrEngineFor('api', 'fr', false)).toBe('api');
-  });
-
-  it('reads a value this version does not take as unset', () => {
-    expect(asrEngineFor('auto', 'de', true)).toBe('whisper');
-    expect(asrEngineFor('auto', 'ko', true)).toBe('funasr');
-  });
-});
+import { SELF_DEFAULT, directSettings, selfAdjustMode, touchWakes } from '../src/config.ts';
 
 describe('selfAdjust', () => {
   it('reads the boolean earlier versions wrote: true as default, false as off', () => {

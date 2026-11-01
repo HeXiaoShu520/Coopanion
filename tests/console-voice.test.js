@@ -28,13 +28,12 @@ const merge = (to, patch) => {
   }
 };
 
-/** The 「语音输入」 panel over a started World with voice input off and no model on disk. */
+/** The 「语音」 panel over a started World with voice input off and no API Key saved. */
 async function mount() {
   const cfg = structuredClone(DESKTOP_PET_DEFAULTS);
   Object.assign(cfg, { enabled: true, port: 0 });
   cfg.window.enabled = false;
   cfg.asr.enabled = false;
-  cfg.asr.engine = 'funasr';
   cfg.asr.mic.mode = 'always';
   const dir = mkdtempSync(join(tmpdir(), 'console-voice-'));
   world = new DesktopPetWorld({
@@ -59,16 +58,26 @@ async function mount() {
     stream: () => ({ dispose() {}, send() {}, open: false }),
   });
   const t = petText('zh').panel;
-  const start = [...root.querySelectorAll('button')].find((b) => b.textContent === t.start);
   const enabled = root.querySelector('input[role="switch"]');
-  return { start, enabled, Event: window.Event };
+  /** The state beside the row named `name`. */
+  const stateOf = (name) => [...root.querySelectorAll('.mountrow')]
+    .find((row) => row.querySelector('.mname')?.textContent === name)
+    ?.querySelector('.mstate')?.textContent;
+  return { root, enabled, stateOf, Event: window.Event };
 }
 
-it('greys out 启动 while voice input is off and enables it once voice input is on', async () => {
-  const { start, enabled, Event } = await mount();
-  await vi.waitFor(() => expect(start.disabled).toBe(true));
-  expect(enabled.checked).toBe(false);
+it('names the missing Key once voice input is switched on, and stops the recognizer again when it is off', async () => {
+  const { enabled, stateOf, Event } = await mount();
+  const t = petText('zh');
+  await vi.waitFor(() => expect(stateOf(t.panel.server)).toBe(t.panel.stopped));
+  expect(stateOf(t.panel.apiKey)).toBe(t.panel.keyMissing);
   enabled.checked = true;
   enabled.dispatchEvent(new Event('change'));
-  await vi.waitFor(() => expect(start.disabled).toBe(false));
+  // the recognizer reports the missing Key once its start has run: the panel shows it on its next refresh
+  await vi.waitFor(() => expect(stateOf(t.panel.server)).toBe(t.panel.error), { timeout: 3000 });
+  expect(stateOf(t.panel.apiKey)).toBe(t.panel.keyMissing);
+  expect(enabled.checked).toBe(true);
+  enabled.checked = false;
+  enabled.dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(stateOf(t.panel.server)).toBe(t.panel.stopped));
 });

@@ -1,4 +1,4 @@
-<!-- Owner: src/definition.ts, src/cua/cua.ts, src/world.ts, src/asr/system-recognizer.ts, src/asr/transcription-api.ts, web/mic.js -->
+<!-- Owner: src/definition.ts, src/cua/cua.ts, src/world.ts, src/voice/doubao-asr.ts, web/mic.js -->
 
 <p align="center">
   <picture>
@@ -11,7 +11,7 @@
 [Coopanion](https://github.com/Pal-AI-Lab/Coopanion) 桌面上的 Coo 就是它。
 
 bot 在屏幕底边有一个小身体,由一个形象包提供(见下文):内置的 Coo(C 形的身体,两只 0 形的眼睛,两条短腿)、内置的大肥鱼,或者装上的其他包。它用气泡说话、用选项提问、
-沿屏幕底边走动、做表情和动作;人可以对它说话(FunASR 或 Whisper 在本机识别,Windows 上也可用系统自带的识别)、打字、点选项、戳它、摸它、
+沿屏幕底边走动、做表情和动作;人可以对它说话(录音经豆包的流式识别转成文字)、打字、点选项、戳它、摸它、
 把它拎起来甩出去,这些都作为事件送回 bot。开了电脑操作时,bot 还能看屏幕、动鼠标键盘(见「电脑操作」)。
 
 ## 工具
@@ -62,7 +62,7 @@ World 在 `127.0.0.1:7797`(被占向上顺延)起一个页面服务:`/pet` 是�
 走路只在当前这块显示器上。窗口所在的显示器被拔掉时回到主显示器。`pet_move_to` 的 0–1 和事件里的横向位置都按当前这块显示器算。
 鼠标只在身体、气泡、右键菜单和悬停按钮上时才接收点击,其余位置点击穿透。托盘图标可以显示、隐藏、关闭它。
 鼠标停在桌宠身上时,身旁出现两个按钮:打字说话;语音输入开关(点一下开关 `asr.enabled`,
-正在听时长按半秒把听到的这句话立刻送出,不等停顿;按 toggle 方式开着的说话键同时关上)。夜间模式在右键菜单里切换。窗口打开时桌宠从屏幕顶上掉到底边。
+正在听时长按半秒把听到的这句话立刻送出,不等停顿)。夜间模式在右键菜单里切换。窗口打开时桌宠从屏幕顶上掉到底边。
 右键菜单顶上一行是 bot 的头像(部署目录的 `avatar.png`,没有时画桌宠自己)和名字;内嵌应用借出运行控制时,
 旁边还有暂停/继续、退出按钮,最下面多一行「打开设置」。点退出先在这一行问一次,菜单宽度不变。
 下面六个圆按钮两行三列:打字、语音输入、夜间模式、音效、隐藏、装扮。走动不在菜单里，可以放成悬停按钮。
@@ -158,83 +158,52 @@ overlay 页按画出的时刻显示各帧，帧与帧隔开的时间和桌宠页
 ## 语音输入
 
 桌宠窗口里的页面用麦克风收音,16 kHz 单声道 PCM 经 WebSocket 送到 World,按能量门限切句
-(`src/asr/segmenter.ts`),交给识别引擎,挡掉已知幻觉后作为 `desktop-pet.speech` 投递;应用语言是简体中文且 `asr.simplified` 开着时先把繁体转成简体。
-说话时桌宠歪头倾听,虚线气泡里边说边显示听到的字,还没定下来的部分是灰色的;用 Whisper 和转写接口时一句说完才出字。识别完成后这个气泡留在 Coo 旁边(见「桌宠窗口」)。
-按键收音(`hold`、`toggle`)时气泡里有「取消」按钮:桌宠页发 `cancel`,World 丢掉这次收音手上的音频、转写队列和已识别的文字,在途的转写落地后也丢掉,发 `listen` 的 `none`,不投递事件;`toggle` 下同时关掉收音。
+(`src/asr/segmenter.ts`),交给豆包的流式识别,挡掉已知幻觉后作为 `desktop-pet.speech` 投递;应用语言是简体中文且 `asr.simplified` 开着时先把繁体转成简体。
+说话时桌宠歪头倾听,虚线气泡里边说边显示听到的字,还没定下来的部分是灰色的。识别完成后这个气泡留在 Coo 旁边(见「桌宠窗口」)。
+按住说话键收音时气泡里有「取消」按钮:桌宠页发 `cancel`,World 丢掉这次收音手上的音频、转写队列和已识别的文字,在途的转写落地后也丢掉,发 `listen` 的 `none`,不投递事件。
 
-识别引擎存在 `asr.engine`:
+一句一个会话(`src/voice/doubao-asr.ts`):切句器判定开口后,连同门限之前那几帧,音频每 200 ms 一帧送出去;
+服务在说话过程中回报这句到目前为止的字(`listen` 的 `partial` 带上 `interim`),一句收尾时送一个收尾帧,服务把定稿的几句拼起来,
+`asr.timeoutMs`(默认 20 秒)内没有收尾就按没听出字处理。
 
-| `asr.engine` | 引擎 |
-|---|---|
-| 空(默认) | 按应用语言选:SenseVoice 认的语言(中、英、日、韩)用 `funasr`,其余(法、德、西、葡、意、俄)用 `whisper` |
-| `funasr` | FunASR 的 SenseVoiceSmall(int8),经 sherpa-onnx 的 Node 插件在 World 进程里识别 |
-| `whisper` | OpenAI 的 Whisper small(int8),同样经 sherpa-onnx 在 World 进程里识别 |
-| `system` | Windows 自带的语音识别(SAPI 听写,System.Speech),不用下载,准确度低一些;其他系统上按空处理 |
-| `api` | OpenAI 兼容的转写接口,`asr.api` 里填地址和模型(`src/asr/transcription-api.ts`) |
+识别和朗读共用一把豆包 API Key,在「语音」页填写。它不进 config:World 从部署的 `DESKTOP_PET_DOUBAO_API_KEY`(`DESKTOP_PET_SECRETS.doubaoApiKey`)读,面板只看得到存没存。
+没有 Key 时识别不启动,面板的「识别服务」一行和桌宠的麦克风按钮写明原因;会话连不上、被服务拒绝或中途断开时识别停在出错,原因同样写在这两处,失败的那句在识别结果里划掉;
+之后不再开会话,直到改了地址、存了新的 Key 或重新打开语音输入。
 
-旧版本写下的 `auto` 按空处理。
+`asr.doubao.baseUrl` 留空用官方的 `wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async`,填了必须是 ws 或 wss 地址。
+`asr.language` 取 ISO 639-1 代码或 auto(服务自己判断),空着时跟着应用语言;两个字母的代码补上地区(zh-CN、en-US、ja-JP、ko-KR)再发。
 
-关闭 `asr.enabled` 会停止当前识别引擎：释放已加载的模型，或结束系统识别的 PowerShell 进程；再次开启时重新加载。
+关闭 `asr.enabled` 让识别停在已停止;再打开时按当时的地址和 Key 重新开始。
 
 `sherpa-onnx-node` 是本包的依赖,随包安装(Windows 约 24 MB,macOS 约 35 MB,Linux x64 约 33 MB),不在运行时下载;
 Windows x64、macOS arm64 / x64、Linux x64 / arm64 都有预编译包,Linux 上要 glibc 2.32 与 GCC 11 的 libstdc++ 以上(Ubuntu 22.04、Debian 12 起)。
-只有模型要下载:「语音输入」面板(或应用的新手引导)点一下「下载」,下的是当前引擎的模型;当前是 `system` 时下应用语言对应的那个,下完就换过去。
-文件依次从 ModelScope 取(国内可直接访问),取不到再从 Hugging Face 取,逐个按固定的 SHA-256 校验:
+它只给唤醒词用:关键词模型在「语音」页「叫名字就能叫醒它」一行点「下载」,下的是上游发布的单个压缩包,解开后按 export 取编码器、解码器、连接器和词表四件,
+放在运行时的 `desktop-pet/` 下;识别全走豆包,没有别的模型要下载。
+`asr.threads` 是唤醒词解码用的线程数,0 表示 2。
 
-| 引擎 | 文件 | 放在 `<模型根>/desktop-pet/` 下 |
-|---|---|---|
-| `funasr` | `model.int8.onnx`(228 MB)、`tokens.txt` | `sensevoice-small-int8-2024-07-17/` |
-| `whisper` | `small-encoder.int8.onnx`(107 MB)、`small-decoder.int8.onnx`(250 MB)、`small-tokens.txt` | `whisper-small-int8-2024-07-13/` |
-
-两个模型都一次识别整句。SenseVoice 在说话过程中每 0.5 秒把这句到目前为止的音频重新识别一遍,拿来边说边显示,
-一句收尾后再识别一次定稿(3 秒的一句在两个线程上约 0.1 秒)。
-Whisper 每输出一个词元约 70 ms,3 秒的一句约 1 秒、8 秒的一句约 3 秒(4 核笔记本 CPU 上两个线程;4 核上开 4 个线程更慢),
-所以只在一句收尾后识别一次:边说边重识别会让 CPU 在人说话时一直满着,定稿也要排在正在跑的那次后面。
-Whisper 对静音和底噪也会写出字(字幕署名、`[Musik]` 这类声音标注),兜底有两层:最响的 20 ms 不到 -50 dBFS 的一句不送去识别,
-识别出来的声音标注(以 `[`、`(`、`*`、`♪` 开头)和字幕署名按幻觉挡掉。
-`asr.language` 取 ISO 639-1 代码或 auto,空着时跟随应用语言;SenseVoice 认 zh、en、ja、ko、yue,Whisper 认近百种,不认的代码两者都按 auto(模型自己判断语言)。
-`asr.threads` 是一次识别用的线程数,0 表示 2。
-
-`system` 起一个常驻的 PowerShell 进程(`src/asr/system-sapi.ps1`,经 `-EncodedCommand` 传入,不受执行策略影响),
-一句话边说边送:切句器判定开口后(连同门限之前那几帧)每帧一行 base64 PCM 送进去,
-进程约每 0.4 秒回报一次这句到目前为止的文字(`listen` 的 `partial` 带上 `interim`),一句收尾后几十毫秒内定稿,不必再整句识别一遍。
-按 `asr.language`(空着时取应用语言的语种)挑系统里装着的识别器,同一语种有几个时优先应用语言的地区(繁体中文 zh-TW,拉美西语 es-MX 等),再看 Windows 显示语言。中文 Windows 自带 zh-CN 识别器;
-没有时面板写明去 Windows 设置 → 时间和语言 → 语言里装「语音识别」。
-
-`api` 一句收尾后整句发出:16 kHz、单声道、16 位的 WAV,经 Core 的全局 `fetch`(系统代理照常生效)
-`POST {asr.api.baseUrl}/audio/transcriptions`,multipart 字段 `file`、`model`(`asr.api.model`)、`response_format=json`,
-识别语言是两个字母的代码时再带 `language`(`auto` 和 `yue` 不带);回应里的 `text` 就是这一句。
-API Key 不进 config:「语音输入」面板经 `storeSecret` 存进部署 `.env` 的 `DESKTOP_PET_ASR_API_KEY`(`DESKTOP_PET_SECRETS.asrApiKey`),
-每次请求按 `secret()` 现读,没存时不带 `Authorization`;面板只看得到存没存。
-远程地址只收 https,本机和局域网可以用 http,规则与模型服务的相同(provider-coo 的 `plainRemote`)。
-地址不能用、没填模型、请求失败(HTTP 状态和回应里的 `error.message`,不是这个格式时取回应正文的开头;`asr.timeoutMs` 内没回应;连不上)时,
-引擎停在出错,原因显示在面板的「识别服务」一行和桌宠的麦克风按钮上,失败的那句在识别结果里划掉;
-之后不再发请求,直到点「启动」、改了地址或模型,或在面板里存了新的 API Key。
-
-下载都先写 `.partial`,完整后才改名到位。
-
-收音方式存在 `asr.mic`,在「语音输入」面板里改:
+收音方式存在 `asr.mic`,在「语音」页里改:
 
 | `asr.mic.mode` | 行为 |
 |---|---|
 | `hold`(默认) | 按住说话键时收音,整段都算话,松开即一句结束;连按的键是最后一下按住时收音 |
-| `toggle` | 按一下说话键开始,再按一下停;中间按停顿切句 |
 | `always` | 一直收音,按停顿切句 |
 
-不按住说话键的两种方式里,比说话门槛 `asr.segment.thresholdDb`(dBFS,默认 -42)响的声音才算说话。「语音输入」面板音量条上的竖线就是它,拖动或用方向键修改,经 voice 面板的 `setThreshold` 写进配置,下一帧起生效。门槛只看响度,和使用者一样响的别人说话照样会收进来。
+`asr.mic.roundSeconds`(默认 60,5–300,「语音」页的「每轮最长」)是一轮收音的最长时间:一轮是倾听气泡开着的那段收音,一直收音和叫名字按这个长度分轮。到点先把听到的话送出去、不等收尾静音,收音不停,后面的话进入下一轮;按住说话键时松开就结束一轮,不等这个长度。
+
+一直收音和叫名字时,比说话门槛 `asr.segment.thresholdDb`(dBFS,默认 -42)响的声音才算说话。「语音」页音量条上的竖线就是它,拖动或用方向键修改,经 voice 面板的 `setThreshold` 写进配置,下一帧起生效。门槛只看响度,和使用者一样响的别人说话照样会收进来。
 
 说话键 `asr.mic.hotkey` 用 `+` 连写组合键(`Ctrl+Space`、`F8`、`Mouse4`),结尾加 `*2` / `*3` 表示连按:前面几下是快速的一按一放(每下不超过 300 ms,两下之间隔不超过 400 ms),最后一下按住才算按下。
 默认 `LeftAlt*2`:快速按一下左 Alt(Mac 上是左 Option),紧接着按住说话。按完快速的那一下,World 给桌宠页发 `listen` 的 `ready`,Coo 先抬头看一眼,按住时立刻进入聆听。
-在哪个窗口里按都算;「语音输入」面板的说话键按钮录下组合键,旁边的下拉框选「双击再按住」(`*2`)或「直接按住」(不带 `*`),录键时保留当前的按法。桌宠麦克风按钮的角标显示说话键的简写(`Alt×2`、`F8`、`M4`),一直收音时显示 `AUTO`。
+在哪个窗口里按都算;「语音」页的说话键按钮录下组合键,旁边的下拉框选「双击再按住」(`*2`)或「直接按住」(不带 `*`),录键时保留当前的按法。桌宠麦克风按钮的角标显示说话键的简写(`Alt×2`、`F8`、`M4`),一直收音时显示 `AUTO`。
 Windows 上经 koffi 轮询 Win32 `GetAsyncKeyState` 读取;macOS 上轮询 CoreGraphics 的 `CGEventSourceKeyState`,要在「系统设置 → 隐私与安全性 → 输入监控」里允许,第一次会弹出询问;Linux 上轮询 X11 的 `XQueryKeymap`(Wayland 下经 XWayland,只在 X11 窗口有键盘焦点时读得到;鼠标侧键读不到)。读不到时不识别说话,面板上写明原因。
 `asr.mic.deviceId` 选麦克风,留空用系统默认;设备列表由桌宠页上报,设备名称需要麦克风权限。
 系统默认输入设备改变时,桌宠页关闭旧音频流并重新收音;指定麦克风时保留所选设备。
 音轨结束时重新开麦,打开失败(权限被拒绝除外)时在下一次设备变化后重试。
 麦克风在「开启语音输入」总开关开着时一直打开,电平条随时显示音量,说话键只决定哪一段送去识别。
 打字键 `typeKey` 默认关(「习惯」页的「打字键」,经 pet 面板的 `setTypeKey` 修改)。打开后在哪个窗口里按下 `typeKey.hotkey` 都打开桌宠的打字框，和双击桌宠打开的是同一个：World 给桌宠页发 `type`,桌宠隐藏时不发。
-写法和说话键相同，默认 `LeftCtrl*2`(快速按两下左 Ctrl,Mac 上是左 Control),连按时最后一下按下就算;「习惯」页录键与选按法(按一下、双击)的做法同「语音输入」面板(`src/webui/key-capture.ts`)。
+写法和说话键相同，默认 `LeftCtrl*2`(快速按两下左 Ctrl,Mac 上是左 Control),连按时最后一下按下就算;「习惯」页录键与选按法(按一下、双击)的做法同「语音」页(`src/webui/key-capture.ts`)。
 Windows 上桌宠窗口从前台窗口拿走键盘，打字框关掉后还回去。读键的方式和读不到时的原因同说话键，原因写在「习惯」页这一行下面。
-`hold` 下开启 `asr.mic.openOnPress`(默认关,「语音输入」页的「按住时才打开麦克风」)后,桌宠页只在说话键按住时打开麦克风,松开 500 ms 后关掉;倾听气泡等第一帧音频到了才出现。给一打开麦克风就切到通话模式的耳机用,按下到麦克风打开之间说的话收不到。
+`hold` 下开启 `asr.mic.openOnPress`(默认关,「语音」页的「按住时才打开麦克风」)后,桌宠页只在说话键按住时打开麦克风,松开 500 ms 后关掉;倾听气泡等第一帧音频到了才出现。给一打开麦克风就切到通话模式的耳机用,按下到麦克风打开之间说的话收不到。
 
 ## 形象包
 
@@ -260,7 +229,7 @@ Windows 上桌宠窗口从前台窗口拿走键盘，打字框关掉后还回去
 | `entry`、`export` | 模块路径和它导出的工厂函数 |
 | `model` | 交给工厂的 JSON(`opts.model`),可省 |
 | `axes` | 打扮的维度,每维一组选项(`id`、`name`、`thumb`);装扮页每维一行 |
-| `presets` | 维度组合的命名,可带 `accent`、设置窗口配色 `console` 和气泡配色 `bubble`(同下) |
+| `presets` | 维度组合的命名,可带 `accent`、设置窗口配色 `console` 和气泡配色 `bubble`(同下);两种配色都是 `{ light, dark }` 各一套十六进制颜色,缺一套或颜色写错时整项不用 |
 | `vocab` | 这个身体做的全部表情和动作,也就是它在场时 bot 的整张词表:每个词 `id`、`kind`(`expression` / `motion`)、`names`(按语言的名字列表)、`about`(它做这个词的样子)、`seconds`(连着做时等多久再做下一个),`lasting: true` 表示保持到下一个动作;`kind` 是这一版不认识的值时跳过那个词 |
 | `sounds` | 包自带的音频:名字 → `{ file, kind, volume }`,文件是包里的 `.ogg` `.mp3` `.wav`,`kind` 是 `move` `touch` `face` `snore` `talk` 之一;`talk` 的声音在气泡打字时逐字轮流响，代替页面合成的叽咕声，同一个字总是同一个声音;不存在的文件、这一版不认识的 `kind` 或文件类型,在扫描时记一条问题,那个声音不响 |
 | `voice` | `{ pitch }`:叽咕声的音高倍数,0.5–2,默认 1;有 `talk` 声音时是它们的播放速度。说话声(音节库)开着时按设置里的音高，不看它 |
@@ -534,7 +503,7 @@ corepack pnpm build        # 面板产物 dist/,不进版本库
 ```bash
 corepack pnpm test
 corepack pnpm typecheck
-npx tsx scripts/check-voice.ts <模型根> <语音.wav> [应用语言]   # 连真模型手动检查(fr 等走 Whisper),模型不在就先下载
+npx tsx scripts/check-voice.ts <语音.wav> [应用语言]   # 连真豆包服务手动检查,需要 DESKTOP_PET_DOUBAO_API_KEY
 ```
 
 `tsconfig.json` 与 `vitest.config.ts` 把 `cortico/*` 指到主仓库的 `vendor/cortico/src/`;

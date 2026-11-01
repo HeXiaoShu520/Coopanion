@@ -215,6 +215,19 @@ describe('one sentence', () => {
     expect(await session.end()).toMatchObject({ text: '', error: why });
   });
 
+  it('stops the engine on a rejection from the service, after the socket came up too', async () => {
+    const h = harness();
+    await h.asr.start();
+    const session = h.asr.sentence()!;
+    h.socket().connect();
+    h.socket().fail(45_000_001, 'quota exceeded');
+    const why = t.failed(45_000_001, 'quota exceeded');
+    expect(h.asr.state()).toMatchObject({ phase: 'error', detail: why });
+    expect(await session.end()).toMatchObject({ text: '', error: why });
+    // the engine no longer takes sentences until it is started again
+    expect(h.asr.sentence()).toBeNull();
+  });
+
   it('reports a socket that never came up, and one that hangs up mid-sentence', async () => {
     const h = harness({ open: () => { throw new Error('ECONNREFUSED'); } });
     await h.asr.start();

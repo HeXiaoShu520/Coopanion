@@ -340,8 +340,8 @@ function snapshotOf(config: CoreConfig, workspace: string, git: () => boolean): 
     scheme: at('worlds.desktop-pet.skin.scheme'),
     roam: at('worlds.desktop-pet.roam'),
     voiceInput: at('worlds.desktop-pet.asr.enabled'),
-    asrEngine: at('worlds.desktop-pet.asr.engine'),
-    micMode: at('worlds.desktop-pet.asr.mic.mode'),
+    // a config written before the switch was dropped reads as hold, as the World reads it
+    micMode: at('worlds.desktop-pet.asr.mic.mode') === 'always' ? 'always' : 'hold',
     talkKey: at('worlds.desktop-pet.asr.mic.hotkey'),
     sound: at('worlds.desktop-pet.sound'),
     sounds: at('worlds.desktop-pet.sounds'),

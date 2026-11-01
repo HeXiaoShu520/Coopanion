@@ -7,12 +7,18 @@ export interface TranscribeResult {
   error: string | null;
 }
 
+/** One sentence being heard: audio goes in while it is spoken, the text comes back after `end`. */
+export interface SpeechSentence {
+  write(frame: Int16Array): void;
+  end(): Promise<TranscribeResult>;
+}
+
 /**
- * Fallback for models that write text for audio without speech: on noise they produce
- * high-frequency lines from their training subtitles, which cannot be told apart from real speech
- * by content, so they are blocked by list; Whisper also labels sounds in brackets, parentheses or
- * asterisks (`[Musik]`, `(звук пива)`, `*Bruit de la porte*`), sometimes cut off before the
- * closing mark. Letting one through means an event claims a sentence nobody said.
+ * Lines a service writes for audio without speech: on noise they come back as stock phrases from
+ * their training subtitles, and some label sounds in brackets, parentheses or asterisks
+ * (`[Música]`, `(звук пива)`, `*Bruit de la porte*`), sometimes cut off before the closing mark.
+ * Their content cannot be told apart from real speech, so they are blocked by list; letting one
+ * through means an event claims a sentence nobody said.
  */
 const HALLUCINATION_PATTERNS: readonly RegExp[] = [
   /^[\s。.,、!?!?…~-]*$/,

@@ -1,24 +1,27 @@
 /**
- * Manual end-to-end check of voice input with the real model and sherpa-onnx: FunASR, or Whisper
- * for an app language SenseVoice does not hear.
+ * Manual end-to-end check of voice input against Doubao: one WAV through the segmenter, the real
+ * recognition service and the speech event, with nothing else.
  *
- *   npx tsx scripts/check-voice.ts <models dir> <speech.wav> [app language, zh when absent]
+ *   set DESKTOP_PET_DOUBAO_API_KEY=…
+ *   npx tsx scripts/check-voice.ts <speech.wav> [app language, zh when absent]
  *
- * Downloads the model into `<models dir>/<model id>/` the way the voice input page does when it is
- * not there yet (ModelScope first), mounts the World, streams the WAV (mono PCM16, any rate) over
- * the pet socket in 20 ms frames, and prints what the bubble showed and the speech event.
+ * The Key is the deployment secret Core hands the World (`DESKTOP_PET_SECRETS.doubaoApiKey`), the
+ * same one reading replies aloud uses. The WAV (mono PCM16, any rate) goes over the pet socket in
+ * 20 ms frames; what the bubble showed and the speech event are printed.
  */
 import { readFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isLanguage } from 'cortico/core/language.ts';
-import { DESKTOP_PET_DEFAULTS } from '../src/config.ts';
+import { DESKTOP_PET_DEFAULTS, DESKTOP_PET_SECRETS } from '../src/config.ts';
 import { DesktopPetWorld } from '../src/world.ts';
 import { FakeHost } from '../tests/helpers/fake-host.ts';
 import { FakePage } from '../tests/helpers/page.ts';
 
-const [modelsDir, wavFile, language = 'zh'] = process.argv.slice(2);
-if (!modelsDir || !wavFile || !isLanguage(language)) throw new Error('usage: check-voice.ts <models dir> <wav> [app language]');
+const [wavFile, language = 'zh'] = process.argv.slice(2);
+if (!wavFile || !isLanguage(language)) throw new Error('usage: check-voice.ts <wav> [app language]');
+const key = process.env[DESKTOP_PET_SECRETS.doubaoApiKey] ?? '';
+if (!key) throw new Error(`${DESKTOP_PET_SECRETS.doubaoApiKey} is not set`);
 
 function readWav(file: string): Int16Array {
   const b = readFileSync(file);
@@ -35,12 +38,14 @@ const cfg = structuredClone(DESKTOP_PET_DEFAULTS);
 Object.assign(cfg, { enabled: true, port: 0 });
 cfg.window.enabled = false;
 cfg.asr.mic.mode = 'always';
-const world = new DesktopPetWorld({ cfg, timezone: 'Asia/Shanghai', persist: () => {}, runtimesRoot: () => mkdtempSync(join(tmpdir(), 'pet-check-')), modelsDir: () => modelsDir, language: () => language });
+const world = new DesktopPetWorld({
+  cfg, timezone: 'Asia/Shanghai', persist: () => {}, runtimesRoot: () => mkdtempSync(join(tmpdir(), 'pet-check-')), modelsDir: () => mkdtempSync(join(tmpdir(), 'pet-check-m-')),
+  language: () => language, doubaoApiKey: () => key,
+});
 const host = new FakeHost();
 await world.start(host);
-const t0 = Date.now();
-await world.installVoice();
-console.log('model', JSON.stringify(world.voiceState().model), 'server', JSON.stringify(world.voiceState().server), `${Date.now() - t0} ms`);
+console.log('server', JSON.stringify(world.voiceState().server), 'doubao', JSON.stringify(world.voiceState().doubao));
+if ((world.voiceState().server as { phase: string }).phase !== 'running') throw new Error('the recognizer did not start; see its detail above');
 const page = await FakePage.open(world.petUrl.replace(/\/pet$/, ''));
 const shown: string[] = [];
 void (async () => {

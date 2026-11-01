@@ -54,7 +54,7 @@
 | `autostart` | 是否开机自动启动 |
 | `figure` / `scheme` / `roam` | 形象（Coo 或大肥鱼）、配色、走动程度 |
 | `voiceInput` | 语音输入是否打开 |
-| `asrEngine` / `micMode` / `talkKey` | 识别引擎（`funasr` / `whisper` / `system` / `api`）、收音方式（按住说 / 按一下开关 / 一直听）、说话键（键名，`*2` 表示先按一下再按住） |
+| `micMode` / `talkKey` | 收音方式（按住说 / 一直听）、说话键（键名，`*2` 表示先按一下再按住） |
 | `sound` / `sounds` | 音效总开关；按类的开关（动作、互动、表情、打呼噜、说话、按钮与提示）和呼噜时长 |
 | `theme` / `scale` / `lockFrameRate` | 夜间模式、桌宠大小、静止时是否也按设定的帧率画 |
 | `hoverButtons` / `doubleClickChat` / `rememberPosition` | 悬停按钮、双击打字是否打开、是否记住位置 |
@@ -79,10 +79,10 @@
 | `source` | `answer` | 引导里「你是从哪里认识我的？」的回答：`bilibili` / `xiaohongshu` / `douyin`(仅中文)、`youtube` / `reddit` / `x` / `instagram` / `tiktok`(中文以外)、`steam` / `github` / `friend` / `other` / `skip` |
 | `persona` | `id` | 引导里选定的人设：`coo`、`grail`、`forge`、`heart`、`winter`、`whale` |
 | `guide_finished` | | 引导走完 |
-| `guide_closed` | `step`、`at` | 引导在第几步被关掉；`at` 是关掉时气泡里那一句的名字，如 `language`（开头选语言的那页，此时 `step` 为 0）、`hello`、`name`、`source`、`persona-pick`、`roam`、`wake`、`vendor`、`model`、`key`、`sign-in`、`voice-download`、`talk`、`persona`、`finish` |
+| `guide_closed` | `step`、`at` | 引导在第几步被关掉；`at` 是关掉时气泡里那一句的名字，如 `language`（开头选语言的那页，此时 `step` 为 0）、`hello`、`name`、`source`、`persona-pick`、`roam`、`wake`、`vendor`、`model`、`key`、`sign-in`、`voice-key`、`talk`、`persona`、`finish` |
 | `model_connected` | `via`、`vendor` | 在气泡里连上了模型。`via`：`guide`（引导里）、`prompt`（没连模型时说话后弹的询问里）、`ask`（定时来问 Key 时）；`vendor` 是选的内置服务的 id |
 | `key_prompt` | `answer` | 没连模型时跟 Coo 说话，它问「要去接通模型吗？」的回答：`connect` / `later` |
-| `voice_model` | `result` | 引导里语音识别模型的下载：`ready`（下好了）、`failed`（没下下来）、`later`（选了先不用） |
+| `voice_key` | `result` | 引导里发现豆包 API Key 没填时指路到「语音」页：`missing` |
 | `extension_installed` / `extension_removed` | `name`、`version`、`kind` | 启动时发现扩展比上次多了或少了 |
 | `crash` | `where`，其余见下表 | Core 出错。`where` 是来源：`core`（未捕获的异常，Core 随后退出）、`core-rejection`（未处理的 promise 拒绝，Core 继续运行；同样的一条在一次运行里只报一次）、`core-exit`（Core 进程意外退出后被重启，由重启后的 Core 报告） |
 | `telemetry_disabled` / `telemetry_enabled` | | 关掉或重新打开统计 |

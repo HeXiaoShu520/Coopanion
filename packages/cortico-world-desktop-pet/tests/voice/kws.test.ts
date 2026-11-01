@@ -4,7 +4,7 @@
  * are kept from waking the pet over and over. No model, no microphone, no network.
  */
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
@@ -180,6 +180,14 @@ describe('starting the spotter', () => {
     expect(config.featConfig).toEqual({ sampleRate: 16_000, featureDim: 80 });
     expect((config.modelConfig as { transducer: Record<string, string> }).transducer.encoder).toBe(h.paths.encoder);
     expect(h.spotter.streams).toHaveLength(1);
+  });
+
+  it('keeps the words it was built for after the file under it goes away', async () => {
+    const h = setup();
+    await h.wake.start();
+    // the page still shows what the running spotter hears, whether or not the file is still there
+    rmSync(h.keywordsFile);
+    expect(h.wake.state()).toMatchObject({ phase: 'listening', words: ['小可'] });
   });
 });
 

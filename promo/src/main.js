@@ -687,7 +687,7 @@ const voiceScene = sceneLayer(T.voice);
 const voiceCap = new Caption(voiceScene.el, { x: 140, y: 300, size: 88 });
 voiceCap.set('语音输入');
 const voiceSub = new Caption(voiceScene.el, { x: 140, y: 430, size: 40, weight: 400, color: 'var(--ink-soft)', stagger: .02 });
-voiceSub.set('FunASR 在本机识别');
+voiceSub.set('豆包流式识别');
 const waves = svgEl('svg', { class: 'full', viewBox: `0 0 ${W} ${H}` });
 voiceScene.el.appendChild(waves);
 const LISTEN = [bar(36) + .8, HEARD.final];

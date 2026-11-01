@@ -1,4 +1,4 @@
-/** The filter for recognizer lines that are not speech, against what Whisper wrote for silence and room noise, and how sentences heard one after another are joined. */
+/** The filter for recognizer lines that are not speech, against what a recognizer wrote for silence and room noise, and how sentences heard one after another are joined. */
 import { describe, expect, it } from 'vitest';
 import { joinSpeech, looksHallucinated } from '../src/asr/result.ts';
 
@@ -17,7 +17,7 @@ describe('joinSpeech', () => {
 });
 
 describe('looksHallucinated', () => {
-  it("drops Whisper's sound labels, cut off or whole, and its subtitle credits", () => {
+  it("drops sound labels, cut off or whole, and subtitle credits", () => {
     for (const line of ['[Musique]', '(...)', '...', '*Bruit de la porte*', '* Stille *', '[Sottotitoli e rispondenti del', '(звук пива', 'Субтитры субтитров О.', '♪']) {
       expect(looksHallucinated(line), line).toBe(true);
     }

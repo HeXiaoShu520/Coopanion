@@ -40,7 +40,9 @@ export function createMic({ prefs, send, sendAudio }) {
       // read before opening: a report after it may already see the next default
       const defaultInput = await reportDevices();
       if (mic !== opening) return;
-      const audio = { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+      // 回声消除交给系统(Windows 的 Voice Capture DSP): 它拿扬声器实际输出的数字流当参考,
+      // 比 Chromium 自己估的准; 认不出的约束会被忽略, 回落成 Chromium 的 AEC
+      const audio = { channelCount: 1, echoCancellation: true, echoCancellationType: 'system', noiseSuppression: true, autoGainControl: true };
       if (prefs.micDevice) audio.deviceId = { exact: prefs.micDevice };
       stream = await media.getUserMedia({ audio });
       ctx = new AudioContext({ sampleRate: 16000 });

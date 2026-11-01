@@ -42,6 +42,8 @@ const prefs = {
   roam: 'calm', sound: true, theme: document.documentElement.dataset.theme, scale: 1, bubbleSize: 1, fontSize: 1, bubbleSpeed: 1, glow: 7, user: '', mic: false, micDevice: '', bot: null,
   /** Voice input: switched on, recognizer ready, why not, how to talk, and the mode in force. */
   voice: { enabled: false, ready: false, detail: null, hint: '', mode: 'hold' },
+  /** Wake word: switched on, and the words the spotter last built (empty while off or not built). */
+  wake: { enabled: false, words: [] },
   /** The actions shown as buttons beside the pet on hover. */
   hoverButtons: ['chat', 'voice'],
   rememberPosition: false,
@@ -79,14 +81,18 @@ const sfx = createSfx();
 // Coo's speech stands in for the babble while it is on; its units move the mouth
 const speech = createSpeech(sfx, { onUnit: () => body?.talk() });
 /**
- * The replies the World reads aloud, pulled piece by piece; the syllables stay quiet while one plays.
- * A finished reply is reported back, so the World stops treating that turn as still reading.
+ * The replies the World reads aloud, pulled piece by piece and played in the order said; the syllables
+ * stay quiet while one plays, and the sound itself moves the mouth and the light. Every reply the page
+ * is done with — played out, stopped, taken away — is reported back, so the World stops treating that
+ * turn as still reading.
  */
 const voiceOut = createVoiceOut({
   onDone: (id) => send({ t: 'spoke', id }),
   onFail: (id) => { voiceGlow.fault(); send({ t: 'spoke', id }); },
   // every sentence of a reply starts its own breath of light
   onPiece: () => voiceGlow.beat(),
+  onVoice: (db) => voiceGlow.speakLevel(db),
+  onTalk: () => body?.talk(),
 });
 
 /* ---------- the voice as light on the body ---------- */
@@ -317,6 +323,7 @@ function applyPrefs(p) {
   if (typeof p.micDevice === 'string' && p.micDevice !== prefs.micDevice) { prefs.micDevice = p.micDevice; stopMic(); }
   if (typeof p.mic === 'boolean') { prefs.mic = p.mic; p.mic && !watching ? startMic() : stopMic(); }
   if (p.voice && typeof p.voice === 'object') prefs.voice = { ...prefs.voice, ...p.voice };
+  if (p.wake && typeof p.wake === 'object') prefs.wake = { ...prefs.wake, ...p.wake };
   if (typeof p.doubleClickChat === 'boolean') prefs.doubleClickChat = p.doubleClickChat;
   if (typeof p.statusBubble === 'boolean') { prefs.statusBubble = p.statusBubble; setBody({ thoughtShown: p.statusBubble }); }
   if (typeof p.saidBubbles === 'boolean') { prefs.saidBubbles = p.saidBubbles; if (!p.saidBubbles) for (const line of lines) if (!line.live) fadeLine(line); }
@@ -459,14 +466,13 @@ function closeBubble() {
   releaseKeys(item);
   // a step taken off the bubble unanswered puts back the skin a card tried on
   if (item?.kind === 'dialog') { talk.motion = null; takeOff(false); }
-  // the words go with the bubble: a line taken off the screen is not read on
-  if (item && voiceOut.reading === item.id) send({ t: 'spoke-stop' });
+  // the words go with the bubble: a line taken off the screen is not read on, and the replies behind it still play
+  if (item) voiceOut.drop(item.id);
   bubble.hidden = true; bubble.innerHTML = '';
   // the lines it answered fade a moment after (stepLines)
   if (item) item.endedAt = T;
   item = null;
   speech.stop();
-  voiceOut.stop();
 }
 
 /**
@@ -521,7 +527,7 @@ function stepDialog(dt) {
       if (it.beatDone && pointedAt()) it.holdUntil += dt;
       if (it.beatDone && T < it.holdUntil) return;
       // the voice reading this bubble holds it up: the next words wait until these have been heard
-      if (it.beatDone && voiceOut.reading === it.id) return;
+      if (it.beatDone && voiceOut.holds(it.id)) return;
       it.i++;
       it.beatDone = false;
       if (it.i >= it.beats.length) { closeBubble(); return; }
@@ -553,16 +559,17 @@ function stepDialog(dt) {
 function typeText(it, text, dt, anchors) {
   const p = bubble.querySelector('.b-text');
   if (!p || it.shown >= text.length) return;
-  if (it.spoken !== text) { it.spoken = text; if (!voiceOut.active) speech.begin(text); }
+  const voiced = voiceOut.active;
+  if (it.spoken !== text) { it.spoken = text; if (!voiced) speech.begin(text); }
   // with speech, each pause mark waits its own time, letters type faster, and the voice makes the sound;
   // estimateSeconds in src/script.ts mirrors these steps, this rate and the holds in stepDialog
-  const spoken = speech.active && !voiceOut.active;
+  const spoken = speech.active && !voiced;
   it.acc += dt * 20 * prefs.bubbleSpeed;
   while (it.acc >= 1 && it.shown < text.length) {
     const ch = text[it.shown++];
     it.acc -= spoken ? textSteps(ch) : PAUSE.test(ch) ? 5 : 1;
     if (spoken) speech.reveal(it.shown - 1);
-    else if (!SILENT.test(ch)) { sfx.babble(ch); body?.talk(); }
+    else if (!voiced && !SILENT.test(ch)) { sfx.babble(ch); body?.talk(); }
     while (it.fired < anchors.length && anchors[it.fired].at <= it.shown) acts.push(...anchors[it.fired++].actions);
   }
   if (it.marks?.length) p.innerHTML = marked(text, it.shown, it.marks);
@@ -1222,6 +1229,15 @@ const ACTIONS = {
       : t('action.voiceOn', { mode: t(prefs.voice.mode === 'always' ? 'action.voiceAlways' : 'action.voiceKey'), hint: prefs.voice.hint || '' })),
     run: () => toggleVoice(),
   },
+  wake: {
+    keep: true,
+    icon: () => (prefs.wake.enabled ? ICONS.wake : ICONS.wakeOff),
+    on: () => prefs.wake.enabled,
+    state: () => (!prefs.wake.enabled ? t('action.wakeOff')
+      : prefs.wake.words.length ? t('action.wakeOn', { word: prefs.wake.words.join(', ') })
+      : t('action.wakeNoWord')),
+    run: () => toggleWake(),
+  },
   roam: {
     keep: true, hoverOnly: true,
     icon: () => ICONS[`roam_${prefs.roam}`] ?? ICONS.roam_calm,
@@ -1293,6 +1309,14 @@ function toggleVoice() {
   prefs.voice = { ...prefs.voice, enabled: on };
   refreshButtons();
   send({ t: 'prefs', mic: on });
+}
+
+function toggleWake() {
+  const enabled = !prefs.wake.enabled;
+  // shown at once; the World's next prefs confirm it
+  prefs.wake = { ...prefs.wake, enabled };
+  refreshButtons();
+  send({ t: 'prefs', wake: { enabled } });
 }
 
 /* ---------- menu: the bot and its run controls on top, the actions below; every entry is a round icon button ---------- */
@@ -1890,7 +1914,8 @@ function frame(now) {
     // a throwing step must not take the loop with it: the next frame is only asked for below, and
     // without it the pet freezes for good (a broken figure throws again on every frame it draws)
     const msg = err?.message ?? String(err);
-    if (msg !== frameErr) { frameErr = msg; console.error(err); }
+    // the stack in full: the window process forwards console lines to the World's log, and the message alone names nothing
+    if (msg !== frameErr) { frameErr = msg; console.error(err?.stack ?? String(err)); }
   }
   const full = prefs.lockFrameRate || !!at()?.moving;
   // a moving rate of 0 draws on every display refresh

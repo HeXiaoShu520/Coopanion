@@ -1,14 +1,15 @@
 /**
  * The Doubao streaming synthesizer: one WebSocket per piece of text, PCM at 24 kHz coming back while
- * the person may already be listening. The reply being read is kept by its bubble's id, so the pet
- * page pulls each piece by number (`GET /api/tts/audio?id=…&i=…`); `cancel()` drops the socket of
- * every piece still arriving, and that is how interrupting the bot stops the sound.
+ * the person may already be listening. Every reply being read is kept by its bubble's id in the order
+ * it was said, so the pet page pulls each piece by number (`GET /api/tts/audio?id=…&i=…`) for a
+ * bubble of any age in the turn; `cancel()` drops the socket of every piece still arriving, and that
+ * is how interrupting the bot stops the sound.
  *
  * A piece already made is played from the cache under the voice and the text, so a repeated line
- * costs nothing and sounds at once.
+ * costs nothing and sounds at once. The cache keeps the newest pieces within `CACHE_BYTES_MAX`.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
 import { petText, type PetText } from '../i18n/index.ts';
@@ -39,13 +40,23 @@ export interface TtsOptions {
   cache?: PieceCache;
 }
 
-/** The reply being read: the bubble it belongs to, and its text in the pieces it was split into. */
-interface Reading { id: string; pieces: readonly string[] }
+/** Replies kept at once: one turn's bubbles, with room for the turn before while its last bubble plays. */
+const READINGS_MAX = 32;
+
+/** How much made audio the disk cache holds: a little over twenty minutes of speech, oldest let go first. */
+export const CACHE_BYTES_MAX = 64 * 1024 * 1024;
+
+/** Writes between one look at how much the cache holds; every write would cost more than it saves. */
+const PRUNE_EVERY = 16;
+
+/** The name of a made piece, and the only name the cache ever removes. */
+const PIECE_NAME = /^[0-9a-f]{64}\.pcm$/;
 
 export class DoubaoTts {
   /** The sessions still arriving, so `cancel()` can drop them all. */
   private readonly live = new Set<AbortController>();
-  private reading: Reading | null = null;
+  /** The replies the page may pull, oldest first: a turn is several bubbles and each has its own id. */
+  private readonly readings = new Map<string, readonly string[]>();
   private readonly cache: PieceCache;
 
   constructor(private readonly opts: TtsOptions) {
@@ -61,22 +72,32 @@ export class DoubaoTts {
     return this.opts.key() ? null : this.t.noKey;
   }
 
-  /** The reply the page may ask for; the newest replaces the one before it. */
+  /** The reply the page may ask for; a turn's bubbles stay pullable, the oldest gone past READINGS_MAX. */
   reply(id: string, pieces: readonly string[]): void {
-    this.reading = { id, pieces };
+    this.readings.delete(id);
+    this.readings.set(id, pieces);
+    for (const oldest of this.readings.keys()) {
+      if (this.readings.size <= READINGS_MAX) break;
+      this.readings.delete(oldest);
+    }
   }
 
-  /** How many pieces that reply has; 0 when it is not the one being read. */
+  /** How many pieces that reply has; 0 when it is not one of the replies kept. */
   pieces(id: string): number {
-    return this.reading?.id === id ? this.reading.pieces.length : 0;
+    return this.readings.get(id)?.length ?? 0;
   }
 
   /** One piece of a reply, written out as it arrives; a reason when it could not be made. */
   async speakReply(id: string, index: number, onChunk: (pcm: Uint8Array) => void, signal?: AbortSignal): Promise<string | null> {
-    if (this.reading?.id !== id) return this.t.gone;
-    const text = this.reading.pieces[index];
+    const pieces = this.readings.get(id);
+    const text = pieces?.[index];
     if (text === undefined) return this.t.gone;
     return this.speak(text, onChunk, signal);
+  }
+
+  /** The page is done with `id`: nothing more can be pulled from it. */
+  forget(id: string): void {
+    this.readings.delete(id);
   }
 
   /** `text` as PCM, written out as it arrives; a reason when it could not be made. */
@@ -106,11 +127,11 @@ export class DoubaoTts {
     return { pcm: concat(chunks), error };
   }
 
-  /** Stops every piece still arriving and forgets the reply: the person stopped listening. */
+  /** Stops every piece still arriving and forgets the replies: the person stopped listening. */
   cancel(): void {
     for (const session of this.live) session.abort();
     this.live.clear();
-    this.reading = null;
+    this.readings.clear();
   }
 
   /** The cache name of one text in the voice in force. */
@@ -182,20 +203,46 @@ export class DoubaoTts {
   }
 }
 
+/**
+ * The pieces under `root` past `max` bytes are removed, oldest first. Only a file this cache wrote —
+ * a SHA-256 and `.pcm` — is looked at, and only such a file is removed.
+ */
+export async function pruneCache(root: string, max: number): Promise<void> {
+  const made: Array<{ file: string; at: number; size: number }> = [];
+  for (const name of await readdir(root).catch((): string[] => [])) {
+    if (!PIECE_NAME.test(name)) continue;
+    const file = join(root, name);
+    const info = await stat(file).catch(() => null);
+    if (info?.isFile()) made.push({ file, at: info.mtimeMs, size: info.size });
+  }
+  made.sort((a, b) => a.at - b.at);
+  let kept = made.reduce((n, one) => n + one.size, 0);
+  for (const one of made) {
+    if (kept <= max) break;
+    try { await rm(one.file, { force: true }); } catch { continue; }
+    kept -= one.size;
+  }
+}
+
 /** The made pieces under `dir`, one file each; a cache that cannot be read or written is just a miss. */
 function diskCache(dir: () => string): PieceCache {
   const file = (key: string) => join(dir(), `${key}.pcm`);
+  let writes = 0;
   return {
     async read(key) {
       if (!dir()) return null;
       try { return await readFile(file(key)); } catch { return null; }
     },
     async write(key, pcm) {
-      if (!dir()) return;
+      const root = dir();
+      if (!root) return;
       try {
-        await mkdir(dir(), { recursive: true });
+        await mkdir(root, { recursive: true });
         await writeFile(file(key), pcm);
-      } catch { /* the piece still plays; it is made again next time */ }
+      } catch { /* the piece still plays; it is made again next time */ return; }
+      // the first write of a run looks too, so a cache that grew while the app was closed comes back down
+      if (writes++ % PRUNE_EVERY) return;
+      await pruneCache(root, CACHE_BYTES_MAX);
     },
   };
 }

@@ -150,6 +150,30 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
     const post = (m) => { if (!gone) frame.contentWindow?.postMessage(m, '*'); };
     const timer = setTimeout(() => fail(new Error(t('figure.notReady', { seconds: READY_MS / 1000 }))), READY_MS);
 
+    /**
+     * The rings under the body for this frame: each takes the body's own box, so a scale of 1 sits on the silhouette and
+     * anything above it travels outwards. Only the transform and the alpha are written per frame; the paint changes
+     * when the colour does. No halo rect, no rings.
+     */
+    function drawRings(r, rgb, ripples) {
+      const b = layout?.box;
+      const shown = !!r && !!b && !!ripples?.length;
+      const paint = shown ? `radial-gradient(circle, rgba(0,0,0,0) 56%, rgb(${rgb[0]},${rgb[1]},${rgb[2]}) 66%, rgba(0,0,0,0) 76%)` : '';
+      if (paint && paint !== ringPaint) { ringPaint = paint; for (const el of rings) el.style.background = paint; }
+      const box = shown ? `${b.x - r.x},${b.y - r.y},${b.w},${b.h}` : '';
+      const moved = box !== ringBox;
+      if (moved) {
+        ringBox = box;
+        if (shown) for (const el of rings) Object.assign(el.style, { left: `${b.x - r.x}px`, top: `${b.y - r.y}px`, width: `${b.w}px`, height: `${b.h}px` });
+      }
+      for (let i = 0; i < rings.length; i++) {
+        const el = rings[i], ring = shown ? ripples[i] : null;
+        if (!ring) { if (el.style.opacity !== '0') el.style.opacity = '0'; continue; }
+        el.style.transform = `scale(${ring.s.toFixed(3)})`;
+        el.style.opacity = ring.a.toFixed(3);
+      }
+    }
+
     function close() {
       if (gone) return;
       gone = true;
@@ -266,28 +290,4 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
     addEventListener('message', onMessage);
     layer.appendChild(clip);
   });
-
-  /**
-   * The rings under the body for this frame: each takes the body's own box, so a scale of 1 sits on the silhouette and
-   * anything above it travels outwards. Only the transform and the alpha are written per frame; the paint changes
-   * when the colour does. No halo rect, no rings.
-   */
-  function drawRings(r, rgb, ripples) {
-    const b = layout?.box;
-    const shown = !!r && !!b && !!ripples?.length;
-    const paint = shown ? `radial-gradient(circle, rgba(0,0,0,0) 56%, rgb(${rgb[0]},${rgb[1]},${rgb[2]}) 66%, rgba(0,0,0,0) 76%)` : '';
-    if (paint && paint !== ringPaint) { ringPaint = paint; for (const el of rings) el.style.background = paint; }
-    const box = shown ? `${b.x - r.x},${b.y - r.y},${b.w},${b.h}` : '';
-    const moved = box !== ringBox;
-    if (moved) {
-      ringBox = box;
-      if (shown) for (const el of rings) Object.assign(el.style, { left: `${b.x - r.x}px`, top: `${b.y - r.y}px`, width: `${b.w}px`, height: `${b.h}px` });
-    }
-    for (let i = 0; i < rings.length; i++) {
-      const el = rings[i], ring = shown ? ripples[i] : null;
-      if (!ring) { if (el.style.opacity !== '0') el.style.opacity = '0'; continue; }
-      el.style.transform = `scale(${ring.s.toFixed(3)})`;
-      el.style.opacity = ring.a.toFixed(3);
-    }
-  }
 }

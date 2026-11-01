@@ -129,32 +129,11 @@ export function directSettings(cfg: { selfAdjust: unknown; selfAdjustCustom?: Pa
     mode === 'any' || (mode === 'default' && SELF_DEFAULT[k])
     || (mode === 'custom' && (typeof cfg.selfAdjustCustom?.[k] === 'boolean' ? cfg.selfAdjustCustom[k] === true : SELF_DEFAULT[k]))])) as Record<SelfKey, boolean>;
 }
-/** hold: listen while the talk key is held; toggle: each press starts or stops listening; always: listen all the time. */
-export type MicMode = 'hold' | 'toggle' | 'always';
-/**
- * funasr: FunASR's SenseVoiceSmall; whisper: OpenAI's Whisper small (both in this process, one model
- * download each, every platform); system: the recognizer Windows ships (nothing to download, less accurate);
- * api: an OpenAI-compatible transcription service at `asr.api` (src/asr/transcription-api.ts);
- * doubao: Volcengine's streaming service at `asr.doubao` (src/voice/doubao-asr.ts), the words as they are spoken.
- */
-export type AsrEngine = 'funasr' | 'whisper' | 'system' | 'api' | 'doubao';
+/** hold: listen while the talk key is held; always: listen all the time. A config written before the switch was dropped reads `toggle` as hold. */
+export type MicMode = 'hold' | 'always';
 
 /** The deployment secrets this World reads, by what they are for. */
-export const DESKTOP_PET_SECRETS = { asrApiKey: 'DESKTOP_PET_ASR_API_KEY', doubaoApiKey: 'DESKTOP_PET_DOUBAO_API_KEY' } as const;
-
-/** Languages SenseVoiceSmall hears, by the app language that speaks them; it also takes `yue` and `auto`. */
-export const SENSEVOICE_LANGUAGES: Readonly<Record<string, string>> = { zh: 'zh', 'zh-Hant': 'zh', en: 'en', ja: 'ja', ko: 'ko' };
-
-/**
- * The engine for an `asr.engine` setting and an app language. Empty, or a value this version does
- * not take, the app language picks: FunASR for a language SenseVoice hears, Whisper for the rest.
- * `system` holds only where Windows' recognizer exists (`systemSupported`).
- */
-export function asrEngineFor(setting: string, language: string, systemSupported: boolean): AsrEngine {
-  const byLanguage: AsrEngine = language in SENSEVOICE_LANGUAGES ? 'funasr' : 'whisper';
-  if (setting === 'funasr' || setting === 'whisper' || setting === 'api' || setting === 'doubao') return setting;
-  return setting === 'system' && systemSupported ? 'system' : byLanguage;
-}
+export const DESKTOP_PET_SECRETS = { doubaoApiKey: 'DESKTOP_PET_DOUBAO_API_KEY' } as const;
 
 export interface DesktopPetConfigSection extends WorldSection {
   /** Local server for the pet page, the dressing page and the pet window's socket. */
@@ -257,31 +236,35 @@ export interface DesktopPetConfigSection extends WorldSection {
     /** Under `custom`: the touches that wake the bot. */
     wakeKinds: TouchKind[];
   };
+  /** Speech recognition: Doubao's streaming service (`src/voice/doubao-asr.ts`), the words as they are spoken. */
   asr: {
     enabled: boolean;
-    /** Empty: by the app language (`asrEngineFor`). Earlier versions wrote `auto` here, which reads as empty. */
-    engine: AsrEngine | '';
-    /** An ISO 639-1 code or `auto`; empty follows the app language. FunASR and Whisper read a code they do not take as `auto`. */
+    /** An ISO 639-1 code or `auto`; empty follows the app language. */
     language: string;
-    /** CPU threads for one FunASR or Whisper decode; 0 = two. */
+    /** CPU threads the wake word's spotter decodes with; 0 = two. */
     threads: number;
     /** Traditional characters heard become Simplified, while the app language is `zh`. */
     simplified: boolean;
-    /** How long Windows' recognizer and the transcription service get for one sentence. */
+    /** How long the last utterances of a sentence may take once its audio is closed. */
     timeoutMs: number;
-    /** Engine `api`: requests go to `baseUrl` + `/audio/transcriptions`; the API Key is the secret `DESKTOP_PET_SECRETS.asrApiKey`. */
-    api: { baseUrl: string; model: string };
-    /** Engine `doubao`: sessions go to `baseUrl`; empty uses the official address. The API Key is the secret `DESKTOP_PET_SECRETS.doubaoApiKey`, shared with synthesis. */
+    /** Sessions go to `baseUrl`; empty uses the official address. The API Key is the secret `DESKTOP_PET_SECRETS.doubaoApiKey`, shared with synthesis. */
     doubao: { baseUrl: string };
     segment: SegmentConfig;
     mic: {
       mode: MicMode;
-      /** Talk key for hold and toggle, names joined by `+` (see `src/asr/hotkey.ts`). */
+      /** Talk key for hold, names joined by `+` (see `src/asr/hotkey.ts`). */
       hotkey: string;
       /** Browser media device id of the microphone; empty uses the system default. */
       deviceId: string;
       /** Hold mode: the microphone opens when the talk key goes down and closes after it goes up; off keeps it open while voice input is on. */
       openOnPress: boolean;
+      /**
+       * The longest one round of listening may run, in seconds: a round is a stretch of speech
+       * delivered as one event, and at its end what was heard goes out whether the person paused
+       * or not. Listening carries on in the next round. Only listening without an end of its own —
+       * always-on listening and the wake word — runs on this clock; a held key ends when let go.
+       */
+      roundSeconds: number;
     };
   };
 }
@@ -306,6 +289,9 @@ export const WAKE_DEFAULT_THRESHOLD = .25;
 /** The range of `wake.threshold`, and of `wake.cooldownMs`. */
 export const WAKE_THRESHOLD_MIN = .05, WAKE_THRESHOLD_MAX = .9;
 export const WAKE_COOLDOWN_MAX = 10_000;
+/** The range of `asr.mic.roundSeconds`, and what one round runs until the person changes it. */
+export const ROUND_SECONDS_MIN = 5, ROUND_SECONDS_MAX = 300;
+export const ROUND_SECONDS_DEFAULT = 60;
 
 export const DESKTOP_PET_DEFAULTS: DesktopPetConfigSection = {
   enabled: false,
@@ -337,15 +323,13 @@ export const DESKTOP_PET_DEFAULTS: DesktopPetConfigSection = {
   touch: { enabled: true, wakeOn: 'poke', wakeKinds: ['poke'] },
   asr: {
     enabled: true,
-    engine: '',
     language: '',
     threads: 0,
     simplified: true,
     timeoutMs: 20_000,
-    api: { baseUrl: '', model: '' },
     doubao: { baseUrl: '' },
     segment: { thresholdDb: -42, minSpeechMs: 180, dispatchSilenceMs: 250, silenceMs: 600, maxUtteranceMs: 15_000, preRollMs: 320, minUtteranceMs: 350 },
-    mic: { mode: 'hold', hotkey: DEFAULT_HOTKEY, deviceId: '', openOnPress: false },
+    mic: { mode: 'hold', hotkey: DEFAULT_HOTKEY, deviceId: '', openOnPress: false, roundSeconds: ROUND_SECONDS_DEFAULT },
   },
 };
 
@@ -435,16 +419,13 @@ export function desktopPetConfigGroups(language: Language = 'zh'): ConfigGroup[]
       title: c.asrGroup,
       properties: {
         [`${K}.asr.enabled`]: { type: 'boolean', title: c.asrEnabled.title, 'x-hot': true },
-        [`${K}.asr.engine`]: { type: 'string', title: c.asrEngine.title, enum: ['', 'funasr', 'whisper', 'system', 'api', 'doubao'], description: c.asrEngine.description, 'x-hot': true },
-        [`${K}.asr.api.baseUrl`]: { type: 'string', title: c.asrApiUrl.title, description: c.asrApiUrl.description, 'x-hot': true },
-        [`${K}.asr.api.model`]: { type: 'string', title: c.asrApiModel.title, description: c.asrApiModel.description, 'x-hot': true },
         [`${K}.asr.doubao.baseUrl`]: { type: 'string', title: c.asrDoubaoUrl.title, description: c.asrDoubaoUrl.description, 'x-hot': true },
         [`${K}.asr.language`]: { type: 'string', title: c.asrLanguage.title, description: c.asrLanguage.description, 'x-hot': true },
-        [`${K}.asr.threads`]: { type: 'integer', title: c.asrThreads.title, minimum: 0, maximum: 16, description: c.asrThreads.description, 'x-hot': true },
         [`${K}.asr.simplified`]: { type: 'boolean', title: c.asrSimplified.title, description: c.asrSimplified.description, 'x-hot': true },
         [`${K}.asr.segment.thresholdDb`]: { type: 'number', title: c.thresholdDb.title, minimum: THRESHOLD_DB_MIN, maximum: THRESHOLD_DB_MAX, 'x-suffix': 'dBFS', 'x-hot': true },
         [`${K}.asr.segment.silenceMs`]: { type: 'integer', title: c.silenceMs.title, minimum: 200, maximum: 5000, 'x-suffix': 'ms', 'x-hot': true },
         [`${K}.asr.segment.maxUtteranceMs`]: { type: 'integer', title: c.maxUtteranceMs.title, minimum: 2000, maximum: 60000, 'x-suffix': 'ms', 'x-hot': true },
+        [`${K}.asr.mic.roundSeconds`]: { type: 'integer', title: c.roundSeconds.title, description: c.roundSeconds.description, minimum: ROUND_SECONDS_MIN, maximum: ROUND_SECONDS_MAX, 'x-suffix': c.roundSeconds.suffix, 'x-hot': true },
       },
     },
   };

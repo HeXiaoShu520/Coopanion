@@ -1,7 +1,7 @@
 /**
- * The Doubao streaming recognizer (engine `doubao`): one WebSocket session per sentence. Audio goes
- * out as it is heard, so the words arrive while the person is still speaking, and the last frame
- * closes the input; what the service settles is joined into the result.
+ * The Doubao streaming recognizer: one WebSocket session per sentence. Audio goes out as it is
+ * heard, so the words arrive while the person is still speaking, and the last frame closes the
+ * input; what the service settles is joined into the result.
  *
  * A session that cannot connect, or that the service answers with an error, puts the engine in
  * `error` with the reason: nothing more is sent until it is started again, which a change of
@@ -9,8 +9,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Logger } from 'cortico/core/types.ts';
-import { joinSpeech, type TranscribeResult } from '../asr/result.ts';
-import type { SystemSentence } from '../asr/system-recognizer.ts';
+import { joinSpeech, type SpeechSentence, type TranscribeResult } from '../asr/result.ts';
 import { petText, type PetText } from '../i18n/index.ts';
 import { ASR_SAMPLE_RATE, AsrReader, SAUC_RESOURCE, SAUC_URL, SpeechFrameError, audioFrame, parseAsrFrame, startFrame } from './protocol.ts';
 import { openSocket, type SocketOpen, type SpeechSocket } from './socket.ts';
@@ -118,7 +117,7 @@ export class DoubaoAsr {
   }
 
   /** A session for the sentence being heard now, or null when the engine is not running. */
-  sentence(onPartial: (text: string) => void = () => {}): SystemSentence | null {
+  sentence(onPartial: (text: string) => void = () => {}): SpeechSentence | null {
     if (this.phase !== 'running') return null;
     return new DoubaoSession({
       url: this.url(),
@@ -154,7 +153,7 @@ function languageTag(language: string): string {
  * One sentence on its own socket. Audio written before the connection opens is held, so the first
  * frames of a sentence are not lost; the start request goes out first, then those frames.
  */
-class DoubaoSession implements SystemSentence {
+class DoubaoSession implements SpeechSentence {
   private readonly reader = new AsrReader();
   private socket: SpeechSocket | null = null;
   private ready = false;
@@ -233,19 +232,22 @@ class DoubaoSession implements SystemSentence {
       this.fail(this.s.text.badFrame(err instanceof SpeechFrameError ? err.message : (err as Error).message));
       return;
     }
-    if (frame.kind === 'error') { this.fail(this.s.text.failed(frame.code, frame.message)); return; }
+    if (frame.kind === 'error') { this.fail(this.s.text.failed(frame.code, frame.message), true); return; }
     const reading = this.reader.read(frame.payload, frame.last);
     this.finals.push(...reading.finals);
     if (reading.partial) this.onPartial(reading.partial);
     if (frame.last) this.settle();
   }
 
-  /** A session that never opened, or one the service rejected. */
-  private fail(why: string): void {
+  /**
+   * One failure. A session that never opened, or that the service answered with an error, stops
+   * the engine; the rest — a hang-up mid-sentence, a frame that cannot be read — fail it alone.
+   */
+  private fail(why: string, fatal = false): void {
     if (this.failure) return;
     this.failure = why;
     this.s.log.warn(`豆包识别失败:${why}`);
-    if (!this.ready) this.s.fatal(why);
+    if (fatal || !this.ready) this.s.fatal(why);
     this.settle();
   }
 

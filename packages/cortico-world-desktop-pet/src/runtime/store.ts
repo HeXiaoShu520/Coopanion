@@ -1,19 +1,14 @@
 /**
- * Managed downloads: the speech models (FunASR's SenseVoiceSmall and Whisper small, int8 in
- * sherpa-onnx's format) and the Electron runtime that hosts the pet window when it runs outside an
- * app. Every artifact is pinned. Files land at `<CORTICO_HOME>/runtimes/<id>/<version>/` and
- * `<CORTICO_HOME>/models/desktop-pet/<model id>/`, are written to `.partial` first and renamed
- * into place when complete; model files are checked against their published SHA-256.
- *
- * A model is fetched from ModelScope first, which answers from mainland China, and from Hugging
- * Face when ModelScope does not; the files are the same (their SHA-256 match).
+ * Managed downloads: the wake word model and the Electron runtime that hosts the pet window when it
+ * runs outside an app. Files land at `<CORTICO_HOME>/runtimes/<id>/<version>/` and
+ * `<CORTICO_HOME>/models/desktop-pet/<model id>/`, are written to `.partial` first and renamed into
+ * place when complete.
  *
  * Archives are unpacked with the system `tar` (bsdtar on Windows and macOS reads zip too);
  * Linux zips go through `unzip`. A `.tar.bz2` is expanded in process first: Windows' bsdtar carries
  * no bzip2 of its own and asks for an external `bzip2`, which most machines do not have.
  */
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -36,42 +31,6 @@ export interface ArtifactState {
 }
 
 const platformKey = (): string => `${process.platform}-${process.arch}`;
-
-/** A model: its files with their sizes and SHA-256, and where to fetch them from, in order. */
-export interface ModelSpec {
-  id: string;
-  /** `role` is what the recognizer loads the file as (`src/asr/sherpa.ts`). */
-  files: ReadonlyArray<{ role: string; name: string; bytes: number; sha256: string }>;
-  sources: ReadonlyArray<(file: string) => string>;
-}
-
-/** FunASR's SenseVoiceSmall, int8, as sherpa-onnx loads it (Apache-2.0 export by k2-fsa). */
-export const FUNASR_MODEL: ModelSpec = {
-  id: 'sensevoice-small-int8-2024-07-17',
-  files: [
-    { role: 'model', name: 'model.int8.onnx', bytes: 239_233_841, sha256: 'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51' },
-    { role: 'tokens', name: 'tokens.txt', bytes: 315_894, sha256: 'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc' },
-  ],
-  /** Tried in order for each file. */
-  sources: [
-    (file: string) => `https://modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/master/${file}`,
-    (file: string) => `https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/${file}`,
-  ],
-};
-
-/** OpenAI's Whisper small, int8, as sherpa-onnx loads it (MIT; export by k2-fsa, uploaded 2024-07-13). */
-export const WHISPER_MODEL: ModelSpec = {
-  id: 'whisper-small-int8-2024-07-13',
-  files: [
-    { role: 'encoder', name: 'small-encoder.int8.onnx', bytes: 112_442_483, sha256: '4cbe7b22fa9026b843b60a68640c747de05bafb1a11b57edc0e66c232d9f33a9' },
-    { role: 'decoder', name: 'small-decoder.int8.onnx', bytes: 262_226_114, sha256: 'acad50b5c782696e91b55914cc5ab4f756f1532f76e22aa6fc615f39fb69a8ee' },
-    { role: 'tokens', name: 'small-tokens.txt', bytes: 816_730, sha256: 'b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126' },
-  ],
-  sources: [
-    (file: string) => `https://modelscope.cn/models/pengzhendong/sherpa-onnx-whisper-small/resolve/master/${file}`,
-    (file: string) => `https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/${file}`,
-  ],
-};
 
 /**
  * The wake word model: sherpa-onnx's zipformer keyword spotter over WenetSpeech, about 3 MB in all
@@ -219,12 +178,6 @@ export async function extract(archive: string, into: string, t: PetText['store']
   }
 }
 
-async function sha256File(file: string): Promise<string> {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
-  return hash.digest('hex');
-}
-
 interface Job { state: ArtifactState; promise: Promise<void> | null }
 
 /** Tracks one runtime directory: present when its executable is found inside. */
@@ -287,77 +240,6 @@ class RuntimeSlot {
       this.job.state = { phase: 'ready', path: this.dir, done: asset.bytes, total: asset.bytes, detail: null };
     })().catch((err: Error) => {
       rmSync(partial, { recursive: true, force: true });
-      this.job.state = { phase: 'error', path: this.dir, done: 0, total: null, detail: err.message };
-    }).finally(() => { this.job.promise = null; });
-    this.job.promise = work;
-    return work;
-  }
-}
-
-/** A speech model: present when every file is there at its full size. */
-class ModelSlot {
-  private job: Job;
-  readonly bytes: number;
-  constructor(private readonly root: () => string, private readonly spec: ModelSpec, private readonly text: StoreText, private readonly fetchImpl?: typeof fetch) {
-    this.bytes = spec.files.reduce((n, f) => n + f.bytes, 0);
-    this.job = { state: { phase: 'absent', path: '', done: 0, total: null, detail: null }, promise: null };
-  }
-
-  get dir(): string {
-    return join(this.root(), this.spec.id);
-  }
-
-  file(name: string): string {
-    return join(this.dir, name);
-  }
-
-  /** Where each file lives, by role. */
-  paths(): Record<string, string> {
-    return Object.fromEntries(this.spec.files.map((f) => [f.role, this.file(f.name)]));
-  }
-
-  private has(f: { name: string; bytes: number }): boolean {
-    const path = this.file(f.name);
-    return existsSync(path) && statSync(path).size === f.bytes;
-  }
-
-  state(): ArtifactState {
-    if (this.job.promise) return { ...this.job.state };
-    if (this.spec.files.every((f) => this.has(f))) return { phase: 'ready', path: this.dir, done: this.bytes, total: this.bytes, detail: null };
-    return { ...this.job.state, phase: this.job.state.phase === 'error' ? 'error' : 'absent', path: this.dir };
-  }
-
-  install(): Promise<void> {
-    if (this.job.promise) return this.job.promise;
-    this.job.state = { phase: 'working', path: this.dir, done: 0, total: this.bytes, detail: this.text().downloadingModel };
-    const work = (async () => {
-      mkdirSync(this.dir, { recursive: true });
-      let before = 0;
-      for (const f of this.spec.files) {
-        if (this.has(f)) { before += f.bytes; this.job.state.done = before; continue; }
-        const partial = `${this.file(f.name)}.partial`;
-        const errors: string[] = [];
-        for (const source of this.spec.sources) {
-          const url = source(f.name);
-          try {
-            this.job.state.detail = this.text().downloadingFrom(f.name, new URL(url).host);
-            await downloadFile(url, partial, { fetchImpl: this.fetchImpl, onProgress: (done) => { this.job.state.done = before + done; } });
-            this.job.state.detail = this.text().verifying(f.name);
-            const sum = await sha256File(partial);
-            if (sum !== f.sha256) throw new Error(this.text().mismatch(sum.slice(0, 12)));
-            renameSync(partial, this.file(f.name));
-            break;
-          } catch (err) {
-            rmSync(partial, { force: true });
-            errors.push(`${new URL(url).host}: ${(err as Error).message}`);
-          }
-        }
-        if (!this.has(f)) throw new Error(this.text().failed(f.name, errors.join('; ')));
-        before += f.bytes;
-        this.job.state.done = before;
-      }
-      this.job.state = { phase: 'ready', path: this.dir, done: this.bytes, total: this.bytes, detail: null };
-    })().catch((err: Error) => {
       this.job.state = { phase: 'error', path: this.dir, done: 0, total: null, detail: err.message };
     }).finally(() => { this.job.promise = null; });
     this.job.promise = work;
@@ -430,13 +312,14 @@ class KwsSlot {
       this.job.state.detail = this.text().unpacking;
       await extract(archive, partial, this.text());
       rmSync(archive, { force: true });
-      rmSync(this.dir, { recursive: true, force: true });
       // the files are looked for inside `partial` before it is moved: a moved directory is easier to
-      // get wrong than to check, and half of a model would then read as a whole one
+      // get wrong than to check, and half of a model would then read as a whole one; the model that
+      // is there stays until the new one has checked out whole
       if (!pickExport(partial) || !findByMatch(partial, this.spec.tokens)) {
         rmSync(partial, { recursive: true, force: true });
         throw new Error(this.text().failed(this.spec.archive, KWS_ROLES.join(' ')));
       }
+      rmSync(this.dir, { recursive: true, force: true });
       renameSync(partial, this.dir);
       this.job.state = { phase: 'ready', path: this.dir, done: this.job.state.done, total: this.job.state.total, detail: null };
     })().catch((err: Error) => {
@@ -452,9 +335,6 @@ export interface RuntimeStoreOptions {
   runtimesRoot: () => string;
   modelsDir: () => string;
   fetchImpl?: typeof fetch;
-  /** The speech models; tests pass small ones. */
-  funasrModel?: ModelSpec;
-  whisperModel?: ModelSpec;
   /** The wake word model; tests pass a small archive. */
   kwsModel?: KwsModelSpec;
   /** The text table of the app language, read at each step; Chinese when absent. */
@@ -463,16 +343,12 @@ export interface RuntimeStoreOptions {
 
 export class RuntimeStore {
   readonly electron: RuntimeSlot;
-  readonly funasr: ModelSlot;
-  readonly whisper: ModelSlot;
   /** The wake word model (`src/voice/kws.ts`), downloaded as one archive. */
   readonly kws: KwsSlot;
 
   constructor(opts: RuntimeStoreOptions) {
     const text = () => (opts.text?.() ?? petText()).store;
     this.electron = new RuntimeSlot(opts.runtimesRoot, ELECTRON_RUNTIME, text, opts.fetchImpl);
-    this.funasr = new ModelSlot(opts.modelsDir, opts.funasrModel ?? FUNASR_MODEL, text, opts.fetchImpl);
-    this.whisper = new ModelSlot(opts.modelsDir, opts.whisperModel ?? WHISPER_MODEL, text, opts.fetchImpl);
     this.kws = new KwsSlot(opts.modelsDir, opts.kwsModel ?? KWS_MODEL, text, opts.fetchImpl);
   }
 }

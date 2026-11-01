@@ -43,6 +43,13 @@ describe('the voice as light on the body', () => {
     expect(run(createVoiceGlow(), 1, { speaking: true }).at(-1).rings).toBeNull();
   });
 
+  it('sends rings out with the reply\'s voice, and none through its silences', () => {
+    const loud = createVoiceGlow(), quiet = createVoiceGlow();
+    loud.speakLevel(-14); quiet.speakLevel(-70);
+    expect(run(loud, 1, { speaking: true }).at(-1).rings).toHaveLength(2);
+    expect(run(quiet, 1, { speaking: true }).at(-1).rings).toBeNull();
+  });
+
   it('follows the person\'s voice: the louder they are, the brighter the light', () => {
     const quiet = createVoiceGlow(), loud = createVoiceGlow();
     quiet.level(-50); loud.level(-14);
@@ -53,9 +60,22 @@ describe('the voice as light on the body', () => {
     }
   });
 
+  it('follows the reply\'s own voice the same way, so reading aloud is not one flat glow', () => {
+    const quiet = createVoiceGlow(), loud = createVoiceGlow();
+    quiet.speakLevel(-42); loud.speakLevel(-14);
+    for (let i = 0; i < 60; i++) {
+      const a = quiet.next(DT, { speaking: true }), b = loud.next(DT, { speaking: true });
+      expect(b.k).toBeGreaterThan(a.k);
+      expect(b.reach).toBeGreaterThan(a.reach);
+    }
+    // and the reading is brighter than the same pause in a silence
+    expect(run(loud, 1, { speaking: true }).at(-1).k).toBeGreaterThan(.5);
+  });
+
   it('lights the body for the answer being read out before the work still going on behind it', () => {
     const speak = createVoiceGlow(), speakAndListen = createVoiceGlow(), listen = createVoiceGlow();
-    for (const glow of [speak, speakAndListen, listen]) glow.level(-12);
+    for (const glow of [speak, speakAndListen]) glow.speakLevel(-12);
+    listen.level(-12);
     const reading = run(speak, 1.5, { speaking: true });
     expect(run(speakAndListen, 1.5, { speaking: true, listening: true, thinking: true }).map((f) => f.k)).toEqual(reading.map((f) => f.k));
     expect(run(listen, 1.5, { hearing: true }).map((f) => f.k)).not.toEqual(reading.map((f) => f.k));

@@ -3,10 +3,13 @@
  * back, what the cache keeps, and how an interruption cuts it short. No network, no sound card.
  */
 import { describe, expect, it } from 'vitest';
+import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
 import { petText } from '../../src/i18n/index.ts';
 import { TTS_RESOURCE, TTS_URL } from '../../src/voice/protocol.ts';
-import { DoubaoTts, type PieceCache, type TtsOptions } from '../../src/voice/doubao-tts.ts';
+import { CACHE_BYTES_MAX, DoubaoTts, pruneCache, type PieceCache, type TtsOptions } from '../../src/voice/doubao-tts.ts';
 import type { SocketHandlers, SpeechSocket } from '../../src/voice/socket.ts';
 
 const t = petText('zh').doubao;
@@ -241,32 +244,37 @@ describe('what the service says', () => {
     expect(await done).toBe(t.closed);
   });
 
-  it('does not read a piece of a reply that is no longer the one being read', async () => {
+  it('keeps every bubble of a turn pullable, and forgets one the page finished', async () => {
     const h = harness();
     h.tts.reply('s1', ['第一句。', '第二句。']);
+    // the next bubble of the same turn does not take the first one's pieces away
+    h.tts.reply('s2', ['咱们走吧。']);
     expect(h.tts.pieces('s1')).toBe(2);
-    expect(h.tts.pieces('s2')).toBe(0);
-    expect(await h.tts.speakReply('s2', 0, () => {})).toBe(t.gone);
+    expect(h.tts.pieces('s2')).toBe(1);
+    expect(h.tts.pieces('s3')).toBe(0);
     expect(await h.tts.speakReply('s1', 5, () => {})).toBe(t.gone);
+    expect(await h.tts.speakReply('s3', 0, () => {})).toBe(t.gone);
     expect(h.opened()).toBe(0);
 
-    // a newer reply is the one the page may pull; the one before it is gone
-    h.tts.reply('s2', ['咱们走吧。']);
-    expect(h.tts.pieces('s1')).toBe(0);
+    // the page played one bubble: that id goes, the one behind it stays pullable
+    h.tts.forget('s2');
+    expect(h.tts.pieces('s2')).toBe(0);
+    expect(h.tts.pieces('s1')).toBe(2);
+
     const chunks: Uint8Array[] = [];
-    const done = h.tts.speakReply('s2', 0, (pcm) => chunks.push(pcm));
+    const done = h.tts.speakReply('s1', 0, (pcm) => chunks.push(pcm));
     await tick();
     const socket = h.socket();
     socket.connect();
-    expect(bodyOf(socket.sent[0]!)).toMatchObject({ req_params: { text: '咱们走吧。' } });
+    expect(bodyOf(socket.sent[0]!)).toMatchObject({ req_params: { text: '第一句。' } });
     socket.audio(FIRST);
     socket.end();
     expect(await done).toBe(null);
     expect(chunks).toEqual([FIRST]);
 
     h.tts.cancel();
-    expect(h.tts.pieces('s2')).toBe(0);
-    expect(await h.tts.speakReply('s2', 0, () => {})).toBe(t.gone);
+    expect(h.tts.pieces('s1')).toBe(0);
+    expect(await h.tts.speakReply('s1', 0, () => {})).toBe(t.gone);
   });
 
   it('takes the panel\u2019s try-listen whole, ready to play', async () => {
@@ -279,5 +287,84 @@ describe('what the service says', () => {
     socket.audio(SECOND);
     socket.end();
     expect(await done).toEqual({ pcm: concat([FIRST, SECOND]), error: null });
+  });
+});
+
+describe('the cache on disk', () => {
+  /** A synthesizer keeping its pieces under `dir`, as the World does under the runtime directory. */
+  function onDisk(dir: string): { tts: DoubaoTts; opened: () => number; socket: () => FakeSocket } {
+    const sockets: FakeSocket[] = [];
+    const tts = new DoubaoTts({
+      config: () => ({ voice: 'zh_female_vv_uranus_bigtts' }),
+      key: () => 'key-1',
+      cacheDir: () => dir,
+      text: () => petText('zh'),
+      log: quiet(),
+      open: (_url, _sent, handlers) => {
+        const socket = new FakeSocket(handlers);
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    return { tts, opened: () => sockets.length, socket: (index = -1) => sockets.at(index)! };
+  }
+
+  /** A file whose name is a piece's: a SHA-256 and `.pcm`. */
+  const piece = (hex: string): string => hex.repeat(64) + '.pcm';
+  const put = (dir: string, name: string, at: number, size = 10): string => {
+    const file = join(dir, name);
+    writeFileSync(file, new Uint8Array(size));
+    utimesSync(file, new Date(at), new Date(at));
+    return file;
+  };
+
+  it('sounds a piece made in an earlier run without asking the service again', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pet-tts-'));
+    try {
+      const made = onDisk(dir);
+      const first: Uint8Array[] = [];
+      const done = made.tts.speak('早上好。', (pcm) => first.push(pcm));
+      await tick();
+      made.socket().connect();
+      made.socket().audio(FIRST);
+      made.socket().end();
+      expect(await done).toBe(null);
+      // the piece is written after it has been handed over, so the disk has it one turn later
+      await expect.poll(() => readdirSync(dir).length, { timeout: 5000 }).toBe(1);
+
+      const next = onDisk(dir);
+      const again: Uint8Array[] = [];
+      expect(await next.tts.speak('早上好。', (pcm) => again.push(pcm))).toBe(null);
+      // the same audio a piece is, whether it came back from the service or from a file
+      expect(again.map((pcm) => [...pcm])).toEqual([[...FIRST]]);
+      expect(next.opened()).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('lets the oldest pieces go past the limit, and nothing it did not write', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pet-tts-'));
+    try {
+      const old = put(dir, piece('a'), 1_000);
+      const mid = put(dir, piece('b'), 2_000);
+      const fresh = put(dir, piece('c'), 3_000);
+      const notes = put(dir, 'notes.txt', 500);
+      const other = put(dir, 'abc.pcm', 500);
+
+      // room for two of the three pieces
+      await pruneCache(dir, 25);
+      expect(existsSync(old)).toBe(false);
+      expect(existsSync(mid)).toBe(true);
+      expect(existsSync(fresh)).toBe(true);
+      expect(existsSync(notes)).toBe(true);
+      expect(existsSync(other)).toBe(true);
+
+      // nothing goes while the cache is within the room it is allowed
+      await pruneCache(dir, CACHE_BYTES_MAX);
+      expect(existsSync(mid)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -111,8 +111,6 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
         },
         runtimesRoot,
         modelsDir: () => modelsDirFor(modelsRoot()),
-        asrApiKey: () => ctx.secret(DESKTOP_PET_SECRETS.asrApiKey),
-        storeAsrApiKey: (key) => ctx.storeSecret(DESKTOP_PET_SECRETS.asrApiKey, key),
         doubaoApiKey: () => ctx.secret(DESKTOP_PET_SECRETS.doubaoApiKey),
         storeDoubaoApiKey: (key) => ctx.storeSecret(DESKTOP_PET_SECRETS.doubaoApiKey, key),
         botName: () => assembly.botName?.() ?? ctx.botName,

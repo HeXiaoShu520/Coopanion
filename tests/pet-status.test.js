@@ -45,6 +45,8 @@ function page({ host = false, hash = '' } = {}) {
       reading: null,
       speak: (id, pieces) => voice.push(['speak', id, pieces]),
       stop: () => voice.push(['stop']),
+      drop: (id) => voice.push(['drop', id]),
+      holds: () => false,
       configure: (opts) => voice.push(['configure', opts]),
     }),
     textSteps: () => 1,

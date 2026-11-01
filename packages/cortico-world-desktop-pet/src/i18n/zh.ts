@@ -20,15 +20,10 @@ export default {
 
   /** 语音输入:菜单里麦克风按钮的状态、引导和设置页的说明 */
   voice: {
-    starting: '识别服务启动中',
     notRunning: '识别服务没有运行',
-    modelMissing: (mb: number) => `识别模型尚未下载（约 ${mb} MB），请在「语音输入」页下载`,
     badKey: (hotkey: string) => `无法识别按键「${hotkey}」`,
     keyProblem: (problem: string) => `说话键不可用，暂不识别说话：${problem}`,
     always: '持续收音，直接说话即可',
-    /** 用说话键开关收音;label 是含连击的完整按键名(「双击 左 Alt」) */
-    toggleTaps: (label: string, taps: number) => `${label} 开始收音，再${taps === 2 ? '双击' : '三击'}停止`,
-    toggle: (key: string) => `按一下 ${key} 开始收音，再按一下停止`,
     holdTaps: (key: string, taps: number) => `快速按${taps === 2 ? '一' : '两'}下 ${key}，紧接着按住说话，松开即发送`,
     hold: (key: string) => `按住 ${key} 说话，松开即发送`,
     /** 「语音输入」页识别结果里,没识别出来的那一行 */
@@ -64,42 +59,6 @@ export default {
     linuxNoDisplay: '打字键在 Linux 上需要 X11（或 XWayland）：没有找到 DISPLAY',
     linuxNoX11: '打字键连不上 X11 显示',
     unsupported: '打字键只在 Windows、macOS 和 Linux 上可用',
-  },
-
-  /** Windows 自带的语音识别 */
-  system: {
-    name: (culture: string) => (culture ? `Windows 语音识别（${culture}）` : 'Windows 语音识别'),
-    noSpeech: '系统语音组件 System.Speech 加载不了',
-    noRecognizer: (language: string) => `系统里没有${language === 'auto' ? '' : `「${language}」的`}语音识别器：在 Windows 设置 → 时间和语言 → 语言里给该语言装上「语音识别」`,
-    windowsOnly: '系统语音识别只在 Windows 上可用',
-    startFailed: (why: string) => `启动失败：${why}`,
-    exited: '系统语音识别进程退出了',
-    exitedCode: (code: number | null) => `系统语音识别进程退出（退出码 ${code}）`,
-    notReady: '系统语音识别在期限内没有就绪',
-    notRunning: '系统语音识别没有运行',
-    timeout: (ms: number) => `识别超时（${ms}ms）`,
-    stopped: '系统语音识别已停止',
-  },
-
-  /** sherpa-onnx 跑的识别模型 */
-  sherpa: {
-    incomplete: '识别模型文件不完整，请重新下载',
-    noRuntime: (platform: string) => `这个平台（${platform}）没有 sherpa-onnx 的运行库`,
-    loadFailed: (why: string) => `识别模型载入失败：${why}`,
-    notLoaded: '识别模型没有载入',
-  },
-
-  /** OpenAI 兼容的转写接口(引擎 api) */
-  transcription: {
-    noUrl: '还没有填写转写接口的地址',
-    badUrl: (url: string) => `接口地址不是 http 或 https 网址：${url}`,
-    httpRemote: '远程地址只能用 https：http 不加密，API Key 和录音会明文传输。本机和局域网的地址可以用 http。',
-    noModel: '还没有填写转写模型',
-    notRunning: '转写接口没有启动',
-    status: (status: number, message: string) => (message ? `HTTP ${status}：${message}` : `HTTP ${status}`),
-    timeout: (ms: number) => `接口在 ${ms} ms 内没有回应`,
-    network: (why: string) => `连不上接口：${why}`,
-    noText: '接口的回应里没有 text',
   },
 
   /** 火山豆包(引擎 doubao):识别与朗读共用一把 Key */
@@ -143,16 +102,13 @@ export default {
     hint: '一行一个唤醒词',
   },
 
-  /** 窗口运行时与识别模型的下载 */
+  /** 窗口运行时与唤醒词模型的下载 */
   store: {
     noBuild: (platform: string) => `没有 ${platform} 的预编译包`,
     downloading: (file: string) => `下载 ${file}`,
     unpacking: '解压',
-    downloadingModel: '下载识别模型',
     downloadingWake: '下载唤醒词模型',
     downloadingFrom: (file: string, host: string) => `下载 ${file}（${host}）`,
-    verifying: (file: string) => `校验 ${file}`,
-    mismatch: (sum: string) => `校验不符：${sum}…`,
     failed: (file: string, why: string) => `${file} 下载失败（${why}）`,
     exitCode: (cmd: string, code: number | null, out: string) => `${cmd} 退出码 ${code}：${out}`,
   },
@@ -265,7 +221,7 @@ export default {
     dress: '装扮',
     panels: {
       pet: { title: '桌宠', description: '窗口、装扮与窗口运行时。' },
-      voice: { title: '语音', description: '识别引擎、电平与识别结果，以及朗读回复。' },
+      voice: { title: '语音', description: '识别服务、输入音量与识别结果，朗读回复和唤醒词。' },
     } as Record<'pet' | 'voice', { title: string; description: string }>,
     envPrompt: { title: '桌宠环境', description: '描述桌宠的身体、四个工具与输入事件。' },
     vars: {
@@ -288,7 +244,7 @@ export default {
   config: {
     group: '桌宠',
     soundGroup: '音效',
-    asrGroup: '语音输入',
+    asrGroup: '语音',
     user: { title: '称呼', description: (max: number) => `语音、打字和互动事件里用这个名字指代你，最多 ${max} 个字。留空时用默认称呼。` },
     roam: { title: '走动', description: 'free 常走动；calm 多待着；off 只做被要求的动作。' },
     theme: { title: '夜间模式', description: 'dark 夜间：浅色身体、深色气泡；light 白天：深色身体、浅色气泡。' },
@@ -335,16 +291,13 @@ export default {
     ttsMaxChars: { title: '最长朗读', description: '一条回复最多读这么多字，多出来的不读' },
     ttsClean: { title: '朗读前清洗', description: '去掉代码块、行内代码、链接、emoji 和过长的括号补充，只读能听懂的部分' },
     asrEnabled: { title: '语音输入总开关' },
-    asrEngine: { title: '识别引擎', description: 'funasr 用 FunASR 的 SenseVoiceSmall，支持中文、英文、日文、韩文和粤语，首次要下载约 240 MB 的模型；whisper 用 OpenAI 的 Whisper small，支持法语、德语、西班牙语、葡萄牙语、意大利语、俄语等近百种语言，首次要下载约 360 MB 的模型，一句说完才出字；这两个都在本机识别。system 用 Windows 自带的语音识别，不用下载，准确度低一些（只在 Windows 上有）。api 把每句录音发送给 OpenAI 兼容的转写接口识别，一句说完才出字；地址和模型在下面填写，API Key 在「语音输入」页填写。doubao 用火山豆包的流式识别，一边说一边出字，不用下载模型；地址在下面填写，API Key 在「语音」页填写，和朗读共用一把。留空时按应用语言选：中文、英文、日文、韩文用 funasr，其余用 whisper。' },
-    asrLanguage: { title: '语言', description: 'ISO 639-1 语言代码，或 auto 让模型自己判断；留空时跟随应用语言。FunASR 认 zh、en、ja、ko、yue，Whisper 认 fr、de、es、pt、it、ru 等近百种，不认的代码按 auto。转写接口只在代码是两个字母时带上语言。' },
-    asrApiUrl: { title: '转写接口地址', description: '引擎为 api 时，每句录音发送到这个地址后面的 /audio/transcriptions，例如 https://api.example.com/v1。远程地址只能用 https，本机和局域网的地址可以用 http。' },
-    asrApiModel: { title: '转写模型', description: '引擎为 api 时请求里的模型名。' },
-    asrDoubaoUrl: { title: '豆包接口地址', description: '引擎为 doubao 时连接这个地址，留空用火山官方的 wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async。测试时可以让它指向本机。API Key 在「语音」页填写，识别和朗读共用这一把。' },
-    asrThreads: { title: 'CPU 线程', description: 'FunASR 和 Whisper 一次识别用几个线程，0 = 2。' },
+    asrLanguage: { title: '语言', description: 'ISO 639-1 语言代码，或 auto 让豆包自己判断；留空时跟随应用语言。' },
+    asrDoubaoUrl: { title: '豆包接口地址', description: '留空用火山官方的 wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async；测试时可以让它指向本机。API Key 在「语音」页填写，识别和朗读共用这一把。' },
     asrSimplified: { title: '转成简体', description: '应用语言是简体中文时把识别出的繁体字转成简体。' },
     thresholdDb: { title: '说话门槛' },
     silenceMs: { title: '一句结束的静音' },
     maxUtteranceMs: { title: '一句最长' },
+    roundSeconds: { title: '每轮最长', suffix: '秒', description: '一轮最多听这么久：到点先把听到的话送出去，接着听下一轮。一直收音和叫名字按这个长度分轮；按住说话键时松开就结束一轮。' },
   },
 
   /** 控制台的「桌宠」「语音输入」面板 */
@@ -372,71 +325,56 @@ export default {
 
     voice: '语音',
     more: '更多设置',
+    moreTrouble: '更多设置 · 有异常',
     less: '收起设置',
     enable: '开启语音输入',
     /** Under the master switch: how a sentence starts right now, the wake word being the second way in */
     talkHint: {
       hold: (key: string) => `按住 ${key} 说话`,
-      toggle: (key: string) => `按一下 ${key} 开始，再按一下结束`,
       always: '一直听着，说完停一下它就回应',
       wakeHold: (key: string, word: string) => `按住 ${key} 说话，或者叫一声「${word}」`,
-      wakeToggle: (key: string, word: string) => `按一下 ${key} 开始，或者叫一声「${word}」`,
     },
     enabledHintOnPress: '按住说话键时打开麦克风，松开后关闭',
     disabledHint: '已关闭：不打开麦克风，下面的设置暂不生效',
-    engine: '识别引擎',
-    funasr: 'FunASR（本机识别）',
-    system: 'Windows 自带',
-    whisper: 'Whisper（本机识别）',
-    systemHint: '不用下载，准确度一般；想要更准换成 FunASR 或 Whisper',
-    funasrHint: 'SenseVoiceSmall，在本机识别，支持中文、英文、日文、韩文和粤语',
-    whisperHint: 'Whisper small，在本机识别，支持法语、德语、西班牙语、葡萄牙语、意大利语、俄语等；一句说完才出字',
-    api: '转写接口（OpenAI 兼容）',
-    apiName: '转写接口',
-    apiHint: '每句录音发送给下面填写的接口识别，一句说完才出字',
-    apiUrl: '接口地址',
-    apiModel: '模型',
+    apiUrl: '服务地址',
     apiKey: 'API Key',
+    sharedKey: '识别和朗读共用',
     keySaved: '已保存',
     keyMissing: '未填写',
-    doubao: '豆包语音识别（云端）',
-    doubaoName: '豆包语音识别',
-    doubaoHint: '豆包流式识别，说着话就出字，准确度高；同一个 Key 也用来朗读回复',
     server: '识别服务',
-    start: '启动',
-    stop: '停止',
     ready: '就绪',
     error: '出错',
     stopped: '已停止',
-    model: '识别模型',
     download: '下载',
     retry: '重试',
     downloadFailed: '下载失败',
     downloaded: '已下载',
     notDownloaded: '未下载',
-    modelSource: (size: string) => `约 ${size}，从 ModelScope 下载，国内可用`,
     mic: '麦克风',
     micStates: { on: '收音中', off: '未收音', denied: '被拒绝', error: '出错' } as Record<string, string>,
     defaultDevice: '系统默认',
     missingDevice: '之前选的设备（现在找不到）',
     micN: (n: number) => `麦克风 ${n}`,
     mode: '收音方式',
-    modes: { hold: '按住说话键时收音', toggle: '用说话键切换收音', always: '持续收音' } as Record<'hold' | 'toggle' | 'always', string>,
+    modes: { hold: '按住说话键时收音', always: '持续收音' } as Record<'hold' | 'always', string>,
     openOnPress: '按住时才打开麦克风',
     openOnPressHint: '用蓝牙耳机等一打开麦克风就切到通话模式的耳机时开启；按下后稍等再说话，否则开头的字可能听不到',
+    roundSeconds: '每轮最长（秒）',
     switchOn: '已开启',
     switchOff: '已关闭',
-    /** 说话键怎么按:按住说话、开关收音两种模式下的说法,按连按次数 */
+    /** 说话键怎么按,按连按次数 */
     presses: {
-      2: { hold: '双击再按住', toggle: '双击开始，再双击停止' },
-      1: { hold: '直接按住', toggle: '按一下开始，再按一下停止' },
-      3: { hold: '三击再按住', toggle: '三击开始，再三击停止' },
-    } as Record<number, Record<'hold' | 'toggle', string>>,
+      2: '双击再按住',
+      1: '直接按住',
+      3: '三击再按住',
+    } as Record<number, string>,
     capture: '按下新的说话键，可以是组合键或鼠标侧键…（Esc 取消）',
     listening: '正在倾听',
     waitingKey: '等待说话键',
     results: '识别结果',
     resultsHint: '划线的条目过短或疑似幻觉，未发送',
+    showLog: '查看识别结果',
+    hideLog: '收起识别结果',
     /** 语音输入页:说话键单独一行、识别结果为空时的那一行、音量条左边的字、音量条上门槛线的说明 */
     talkKeyName: '说话键',
     changeKey: '更改',

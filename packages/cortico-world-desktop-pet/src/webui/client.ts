@@ -1,14 +1,13 @@
 /**
  * Console panels for the desktop pet: `pet` (window, dressing, window runtime) and `voice`
- * (recognition engine, the FunASR or Whisper model download, the transcription service's or Doubao's
- * settings (api-rows.ts), microphone level, recognized lines). Data goes
- * through `ctx.invoke`, the level meter through `ctx.stream('voice')`. Text is the World's table
- * (src/i18n) for the console's language.
+ * (Doubao's address and API Key (api-rows.ts), its state, microphone level, recognized lines,
+ * reading replies aloud and the wake word). Data goes through `ctx.invoke`, the level meter through
+ * `ctx.stream('voice')`. Text is the World's table (src/i18n) for the console's language.
  */
 import type { WebUiClientBundle, WebUiPanel, WebUiPanelContext } from 'cortico/web/shared/client-panel.ts';
 import { petText } from '../i18n/index.ts';
 import { captureKey, PRESSES, splitTaps, withTaps } from './key-capture.ts';
-import { apiRows, doubaoRows, type ApiState, type UrlKeyState } from './api-rows.ts';
+import { doubaoRows, type UrlKeyState } from './api-rows.ts';
 import './style.css';
 
 interface Artifact { phase: 'absent' | 'working' | 'ready' | 'error'; path: string; done: number; total: number | null; detail: string | null }
@@ -22,14 +21,8 @@ interface PetState {
 }
 interface VoiceState {
   enabled: boolean;
-  /** The engine in force, and the setting it came from */
-  engine: Engine;
-  engineSetting: Engine;
-  systemSupported: boolean;
-  server: { phase: string; url: string; pid: number | null; detail: string | null } | null;
-  /** The download of the FunASR or Whisper model: the engine in force's, else the app language's. */
-  model: Artifact & { bytes: number; engine: Exclude<Engine, 'system' | 'api' | 'doubao'> };
-  api: ApiState;
+  /** Doubao's recognition: whether it can hear, and why not. */
+  server: { phase: 'stopped' | 'running' | 'error'; url: string; pid: null; detail: string | null } | null;
   /** Doubao's address and whether a key is saved; recognition and synthesis share both. */
   doubao: UrlKeyState;
   /** Reading replies aloud: the settings, and why nothing can be read (no Key). */
@@ -53,6 +46,8 @@ interface VoiceState {
     hotkey: string;
     deviceId: string;
     openOnPress: boolean;
+    /** How long one round the talk key opens or switches on runs, in seconds. */
+    roundSeconds: number;
     /** The keys alone; how they are pressed is the press choice beside them */
     keyLabel: string;
     hint: string;
@@ -66,8 +61,7 @@ interface VoiceState {
   counts: { utterances: number; delivered: number; dropped: number };
 }
 
-type MicMode = 'hold' | 'toggle' | 'always';
-type Engine = 'funasr' | 'whisper' | 'system' | 'api' | 'doubao';
+type MicMode = 'hold' | 'always';
 
 const MB = (n: number) => `${Math.round(n / 1048576)} MB`;
 /** The voice Doubao's synthesis takes when none is named; a hint in the panel's field. */
@@ -163,9 +157,6 @@ const petPanel: WebUiPanel = {
   },
 };
 
-/** The engines with a name of their own; the system recognizer's is in the text table. */
-const ENGINE_NAMES: Partial<Record<Engine, string>> = { funasr: 'FunASR', whisper: 'Whisper', doubao: 'Doubao' };
-
 const FLOOR_DB = -60;
 const meterPct = (db: number) => Math.max(0, Math.min(100, ((db - FLOOR_DB) / -FLOOR_DB) * 100));
 /** The threshold the mark can be set to: the meter's span, whole dB. */
@@ -193,23 +184,11 @@ const voicePanel: WebUiPanel = {
     enabled.setAttribute('role', 'switch');
     enabled.addEventListener('change', () => void call('setEnabled', [enabled.checked])());
     master.append(masterText, enabled);
-    // the rows that answer how a sentence starts, in that order; what an engine needs is behind 更多设置
+    // the rows that answer how a sentence starts, in that order; what the service needs is behind 更多设置
     const settings = ui.h('div', 'pet-voicebody');
     const more = ui.h('div', 'pet-voicebody');
 
-    const eng = statusRow(ctx, t.engine);
-    const engineSel = ui.select();
-    eng.acts.append(engineSel);
-
     const srv = statusRow(ctx, t.server);
-    const btnStart = ui.button(t.start, { size: 'sm', variant: 'primary' });
-    const btnStop = ui.button(t.stop, { size: 'sm' });
-    srv.acts.append(btnStop, btnStart);
-
-    const rt = statusRow(ctx, t.model);
-    const btnInstall = ui.button(t.download, { size: 'sm', variant: 'primary' });
-    rt.acts.append(btnInstall);
-    const api = apiRows(ctx, t, (name) => statusRow(ctx, name), (patch) => void call('setApi', [patch])());
     const doubao = doubaoRows(ctx, t, (name) => statusRow(ctx, name), (patch) => void call('setDoubao', [patch])());
 
     const micRow = statusRow(ctx, t.mic);
@@ -220,7 +199,7 @@ const voicePanel: WebUiPanel = {
     const modeSel = ui.select();
     modeSel.replaceChildren(...(Object.keys(t.modes) as MicMode[]).map((m) => { const o = ui.h('option', null, t.modes[m]); o.value = m; return o; }));
     const pressSel = ui.select();
-    modeRow.acts.append(modeSel, pressSel);
+    modeRow.acts.append(modeSel);
     // hold mode only: the microphone opens with the talk key
     const onPressRow = statusRow(ctx, t.openOnPress);
     const onPress = ui.h('input', 'pet-switch');
@@ -228,10 +207,10 @@ const voicePanel: WebUiPanel = {
     onPress.setAttribute('role', 'switch');
     onPress.addEventListener('change', () => void call('setMic', [{ openOnPress: onPress.checked }])());
     onPressRow.acts.append(onPress);
-    // the talk key has a row of its own above how it listens: the key, and a button to set another
+    // the talk key has a row of its own above how it listens: the key, how it is pressed, and a button for another
     const keyRow = statusRow(ctx, t.talkKeyName);
     const keyBtn = ui.button(t.changeKey, { size: 'sm' });
-    keyRow.acts.append(keyBtn);
+    keyRow.acts.append(pressSel, keyBtn);
 
     // the level meter as one more row: its name in the names' column, the bar where the others' values start
     const meterRow = ui.h('div', 'mountrow pet-meterrow');
@@ -263,8 +242,7 @@ const voicePanel: WebUiPanel = {
     readOn.setAttribute('role', 'switch');
     readOn.addEventListener('change', () => void call('setTts', [{ enabled: readOn.checked }])());
     const readRow = statusRow(ctx, t.read);
-    readRow.acts.append(readOn);
-    const readBody = ui.h('div', 'pet-voicebody');
+    const readBody = ui.h('div', 'pet-voicebody pet-groupblock');
     /** A number the person types: committed on change, so a half-typed value is never saved. */
     const numberRow = (name: string, hint: string, attrs: { min: number; max: number; step: number }, method = 'setTts') => {
       const line = statusRow(ctx, name);
@@ -295,12 +273,12 @@ const voicePanel: WebUiPanel = {
     cleanOn.addEventListener('change', () => void call('setTts', [{ clean: cleanOn.checked }])());
     const cleanRow = statusRow(ctx, text.config.ttsClean.title);
     cleanRow.acts.append(cleanOn);
-    const previewRow = statusRow(ctx, t.preview);
     const btnPreview = ui.button(t.preview, { size: 'sm', variant: 'primary' });
-    previewRow.acts.append(btnPreview);
-    readBody.append(voiceRow.row, speed.row, volume.row, chars.row, cleanRow.row, previewRow.row);
+    // 试听 sits beside the switch it tries: the numbers it uses are behind 更多设置
+    readRow.acts.append(btnPreview, readOn);
+    readBody.append(voiceRow.row, speed.row, volume.row, chars.row, cleanRow.row);
     const readMsg = ui.msgline('');
-    read.body.append(readRow.row, readBody, readMsg);
+    read.body.append(readRow.row, readMsg);
 
     // 「叫名字」: the same microphone, opened by a word instead of the key. The two are the two ways
     // a sentence starts, so its row sits beside the talk key rather than in a card of its own.
@@ -324,20 +302,39 @@ const voicePanel: WebUiPanel = {
     const wakeCooldown = numberRow(wake.cooldownMs.title, 'cooldownMs', { min: 0, max: 10000, step: 100 }, 'setWake');
     const wakeModelRow = statusRow(ctx, wake.model);
 
-    settings.append(keyRow.row, modeRow.row, wakeRow.row, micRow.row, meterRow);
-    more.append(eng.row, srv.row, rt.row, ...api.rows, ...doubao.rows, onPressRow.row, wakeWordsRow.row, wakeWords, wakeThreshold.row, wakeCooldown.row, wakeModelRow.row);
+    // how long one round of listening runs before what was heard goes out
+    const roundRow = numberRow(t.roundSeconds, 'roundSeconds', { min: 5, max: 300, step: 5 }, 'setMic');
+
+    settings.append(srv.row, ...doubao.rows, micRow.row, modeRow.row, keyRow.row, wakeRow.row, meterRow);
+    // behind 更多设置: how the microphone opens, how long a round runs, how replies are read, and the word that starts a sentence
+    more.append(onPressRow.row, roundRow.row, readBody, wakeWordsRow.row, wakeWords, wakeThreshold.row, wakeCooldown.row, wakeModelRow.row);
     more.hidden = true;
     const moreBtn = ui.button(t.more, { size: 'sm' });
     const moreWrap = ui.h('div', 'pet-morebtn');
     moreWrap.append(moreBtn);
+    /** Whether a row behind the button is in a state the person has to act on */
+    let moreTrouble = false;
+    const moreLabel = () => (more.hidden ? (moreTrouble ? t.moreTrouble : t.more) : t.less);
     moreBtn.addEventListener('click', () => {
       more.hidden = !more.hidden;
-      moreBtn.textContent = more.hidden ? t.more : t.less;
+      moreBtn.textContent = moreLabel();
     });
     s.append(moreWrap, more);
 
-    const results = ui.sheet({ title: t.results, desc: t.resultsHint });
-    results.body.append(log.el);
+    // 识别结果 is a log a person reads while something is wrong: it stays folded until asked for
+    const results = ui.sheet({ title: t.results });
+    const logHint = ui.h('div', 'pet-masterhint', t.resultsHint);
+    const logBtn = ui.button(t.showLog, { size: 'sm' });
+    const logWrap = ui.h('div', 'pet-morebtn');
+    logWrap.append(logBtn);
+    log.el.hidden = true;
+    logHint.hidden = true;
+    logBtn.addEventListener('click', () => {
+      log.el.hidden = !log.el.hidden;
+      logHint.hidden = log.el.hidden;
+      logBtn.textContent = log.el.hidden ? t.showLog : t.hideLog;
+    });
+    results.body.append(logWrap, logHint, log.el);
     root.appendChild(results.el);
 
     let st: VoiceState | null = null;
@@ -353,7 +350,6 @@ const voicePanel: WebUiPanel = {
     const talkHint = (mode: MicMode, key: string, word: string) => {
       const h = t.talkHint;
       if (mode === 'always') return h.always;
-      if (mode === 'toggle') return word ? h.wakeToggle(key, word) : h.toggle(key);
       return word ? h.wakeHold(key, word) : h.hold(key);
     };
     const render = (next: VoiceState) => {
@@ -368,44 +364,20 @@ const voicePanel: WebUiPanel = {
         : onPressOn ? t.enabledHintOnPress : talkHint(next.input.mode, next.input.keyLabel, wakeWord);
       settings.classList.toggle('off', !next.enabled);
       more.classList.toggle('off', !next.enabled);
-      const engines: Partial<Record<Engine, string>> = { funasr: t.funasr, whisper: t.whisper };
-      // Windows' own recognizer exists only there
-      if (next.systemSupported) engines.system = t.system;
-      engines.api = t.api;
-      engines.doubao = t.doubao;
-      if (engineSel.dataset.list !== JSON.stringify(engines)) {
-        engineSel.dataset.list = JSON.stringify(engines);
-        engineSel.replaceChildren(...(Object.keys(engines) as Engine[]).map((k) => { const o = ui.h('option', null, engines[k] ?? k); o.value = k; return o; }));
-      }
-      if (document.activeElement !== engineSel) engineSel.value = next.engine;
-      eng.set(ENGINE_NAMES[next.engine] ?? (next.engine === 'api' ? t.apiName : next.engine === 'doubao' ? t.doubaoName : t.system), 'on', { funasr: t.funasrHint, whisper: t.whisperHint, system: t.systemHint, api: t.apiHint, doubao: t.doubaoHint }[next.engine]);
       const sv = next.server;
       if (!sv) srv.set('—', 'off');
       else if (sv.phase === 'running') srv.set(t.ready, 'on', sv.url);
-      else if (sv.phase === 'starting') srv.set(t.starting, 'busy', sv.url);
       else if (sv.phase === 'error') srv.set(t.error, 'bad', sv.detail ?? '');
       else srv.set(t.stopped, 'off', sv.url);
-      btnStart.disabled = !next.enabled || sv?.phase === 'running' || sv?.phase === 'starting';
-      btnStop.disabled = sv?.phase !== 'running';
-
-      const m = next.model;
-      if (m.phase === 'working') rt.set(t.downloading(progress(m)), 'busy', m.detail ?? '');
-      else if (m.phase === 'error') rt.set(t.downloadFailed, 'bad', m.detail ?? '');
-      else if (m.phase === 'ready') rt.set(t.downloaded, 'on', m.path);
-      else rt.set(t.notDownloaded, 'off', t.modelSource(MB(m.bytes)));
-      btnInstall.disabled = m.phase === 'working';
-      btnInstall.hidden = m.phase === 'ready';
-      btnInstall.textContent = m.phase === 'error' ? t.retry : t.download;
-      // the system recognizer, the transcription service and Doubao have no model to download
-      rt.row.style.display = next.engine === 'system' || next.engine === 'api' || next.engine === 'doubao' ? 'none' : '';
-      api.render(next.api, next.engine === 'api');
-      doubao.render(next.doubao, next.engine === 'doubao');
+      doubao.render(next.doubao, next.enabled);
 
       // reading aloud: independent of the recognition switch above, one Key for both
       const read0 = next.tts;
       readOn.checked = read0.enabled;
-      readRow.set(read0.enabled ? t.switchOn : t.switchOff, read0.problem ? 'bad' : read0.enabled ? 'on' : 'off', read0.problem ?? t.readHint);
-      readBody.classList.toggle('off', !read0.enabled);
+      // the card's own line already says how it sounds: this row only speaks up when nothing can be read
+      readRow.set(read0.enabled ? t.switchOn : t.switchOff, read0.problem ? 'bad' : read0.enabled ? 'on' : 'off', read0.problem ?? '');
+      // behind 更多设置 it sits inside a body that already dims with the master switch: dim it once
+      readBody.classList.toggle('off', next.enabled && !read0.enabled);
       if (document.activeElement !== voiceField) voiceField.value = read0.voice;
       if (document.activeElement !== speed.field) speed.field.value = String(read0.speed);
       if (document.activeElement !== volume.field) volume.field.value = String(read0.volume);
@@ -438,6 +410,9 @@ const voicePanel: WebUiPanel = {
       btnWakeModel.disabled = wm.phase === 'working';
       btnWakeModel.hidden = wm.phase === 'ready' || wm.phase === 'working';
       btnWakeModel.textContent = wm.phase === 'error' ? t.retry : t.download;
+      // the rows behind the button can stop working where nobody sees them: the button says which
+      moreTrouble = wm.phase === 'error';
+      moreBtn.textContent = moreLabel();
 
       const mic = next.mic;
       micRow.set(t.micStates[mic.state] ?? mic.state, mic.state === 'on' ? 'on' : mic.state === 'off' ? 'off' : 'bad', mic.detail ?? '');
@@ -452,8 +427,7 @@ const voicePanel: WebUiPanel = {
       if (document.activeElement !== modeSel) modeSel.value = input.mode;
       // a talk key set to three presses in config.json keeps its choice; the panel offers two or one
       const { taps } = splitTaps(input.hotkey);
-      const press = input.mode === 'toggle' ? 'toggle' : 'hold';
-      const presses = PRESSES.filter((n) => n < 3 || n === taps).map((n) => [n, t.presses[n]![press]] as const);
+      const presses = PRESSES.filter((n) => n < 3 || n === taps).map((n) => [n, t.presses[n]!] as const);
       if (pressSel.dataset.list !== JSON.stringify(presses)) {
         pressSel.dataset.list = JSON.stringify(presses);
         pressSel.replaceChildren(...presses.map(([n, label]) => { const o = ui.h('option', null, label); o.value = String(n); return o; }));
@@ -468,6 +442,9 @@ const voicePanel: WebUiPanel = {
       onPressRow.row.style.display = input.mode === 'hold' ? '' : 'none';
       onPress.checked = input.openOnPress;
       onPressRow.set(input.openOnPress ? t.switchOn : t.switchOff, input.openOnPress ? 'on' : 'off', t.openOnPressHint);
+      // a held key ends its round when let go: this length only covers always-on listening and the wake word
+      roundRow.row.style.display = input.mode === 'hold' && !wk.enabled ? 'none' : '';
+      if (document.activeElement !== roundRow.field) roundRow.field.value = String(input.roundSeconds);
       // the loudness threshold only decides where speech starts when the key is not held down
       mark.hidden = input.mode === 'hold';
       if (document.activeElement !== mark) placeMark(next.thresholdDb);
@@ -482,10 +459,6 @@ const voicePanel: WebUiPanel = {
     const call = (method: string, args: unknown[] = []) => async () => {
       try { render(await ctx.invoke<VoiceState>(method, args)); msg.textContent = ''; } catch (err) { msg.textContent = errText(err); }
     };
-    btnStart.addEventListener('click', call('start'));
-    engineSel.addEventListener('change', () => void call('setEngine', [engineSel.value])());
-    btnStop.addEventListener('click', call('stop'));
-    btnInstall.addEventListener('click', call('install'));
     btnWakeModel.addEventListener('click', call('installWake'));
     modeSel.addEventListener('change', () => void call('setMic', [{ mode: modeSel.value }])());
     deviceSel.addEventListener('change', () => void call('setMic', [{ deviceId: deviceSel.value }])());

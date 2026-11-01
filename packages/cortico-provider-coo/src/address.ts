@@ -1,4 +1,4 @@
-/** Which service addresses may use plain http. Imports nothing, so the desktop pet World applies the same rule to its transcription service. */
+/** Which service addresses may use plain http. Imports nothing, so a caller can share the rule without the provider. */
 
 /** An http address outside this computer and the private networks: what is sent there, the key included, is readable on the way. */
 export function plainRemote(baseUrl: string): boolean {

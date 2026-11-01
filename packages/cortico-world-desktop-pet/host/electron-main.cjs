@@ -436,8 +436,8 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true }) {
       else if (!covered && autoHidden) { autoHidden = false; win.showInactive(); }
     }, FULLSCREEN_EVERY_MS);
     win.on('closed', () => { clearInterval(cursorTimer); clearInterval(fullscreenTimer); watchWindows(false); win = null; });
-    // page console lines reach the World's log through stdout
-    win.webContents.on('console-message', (e) => { if (e.level !== 'debug') console.log(`[page:${e.level}] ${e.message}`); });
+    // page console lines reach the World's log through stdout, with where an error came from
+    win.webContents.on('console-message', (e) => { if (e.level !== 'debug') console.log(`[page:${e.level}] ${e.message}${e.stack ? `\n${e.stack}` : e.sourceId ? ` (${e.sourceId}:${e.lineNumber})` : ''}`); });
     win.webContents.on('did-fail-load', (_e, code, desc, failedUrl) => console.log(`[page:error] 加载失败 ${code} ${desc} ${failedUrl}`));
     win.loadURL(url);
   };

@@ -10,7 +10,7 @@
  * - `/api/tts`: reading a reply aloud (src/voice/doubao-tts). The pet page pulls one piece of the reply under
  *   bubble `id` at a time (`GET /api/tts/audio?id=…&i=…`, raw 24 kHz PCM, written as it is synthesized), `POST /api/tts`
  *   (`{ text }`) reads a text no bubble owns, `POST /api/tts/preview` (`{ text }`) answers the same audio as one WAV for
- *   the console's try-listen, and `POST /api/tts/cancel` stops whatever is still arriving. 404 without a synthesizer.
+ *   the console's try-listen. 404 without a synthesizer.
  * - `/api/figures`: the figure packs (src/packs.ts) the pages may load, Coo's first, each with whether it
  *   can be uninstalled (`removable`); `/packs/<id>/…`: an installed pack's files (a built-in one is under
  *   `/web/`). `/api/figures/status`: the installed packs that did not load and why, and whether packs can be
@@ -400,12 +400,11 @@ export class PetServer {
     }
   }
 
-  /** The writes of `/api/tts`: a text read at once, a try-listen as one WAV, and stopping what is arriving. */
+  /** The writes of `/api/tts`: a text read at once, and a try-listen as one WAV. */
   private async ttsRequest(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const tts = this.opts.tts?.();
     if (!tts) { res.writeHead(404).end(); return; }
     const path = url.pathname;
-    if (path === '/api/tts/cancel') { tts.cancel(); return json(res, 200, { ok: true }); }
     if (path !== '/api/tts' && path !== '/api/tts/preview') return json(res, 404, { error: 'not found' });
     const msg = parse(await readBody(req) ?? '');
     if (typeof msg?.text !== 'string') return json(res, 400, { error: 'bad json' });

@@ -19,8 +19,9 @@
  *    typed in) and the key, saved, tested and made active through the WebUI endpoint routes,
  *    on the platform for the language (`defaultRegion`) unless the service is already connected on
  *    the other one; a ChatGPT plan is signed in in the system browser instead of the model and key;
- * 6. voice input: the speech model of the engine in force (FunASR or Whisper, by the app language)
- *    is downloaded with one click when it is missing, then how to talk, with the talk key as a key cap;
+ * 6. voice input: Doubao's recognition, which has no model to download and needs an API Key, the
+ *    one reading aloud uses as well, said to be entered on the settings window's 「语音」 page when
+ *    it is missing, then how to talk, with the talk key as a key cap;
  * 7. where the buttons and the menu are, that Coo's persona is in the settings window's
  *    「系统提示词」 page, and where settings live.
  *
@@ -107,7 +108,7 @@ export interface GuideDeps {
   openDress: () => void;
   /** The introduction ended, walked through or closed. */
   onEnd?: (end: GuideEnd) => void;
-  /** Usage statistics: each step reached, the source answer, a model connected, the voice model download, and how the introduction ended. */
+  /** Usage statistics: each step reached, the source answer, a model connected, the voice API Key, and how the introduction ended. */
   track?: (type: string, fields: Record<string, unknown>) => void;
   /** The app's language: the lines, the order and names of the model services, and which of a service's platforms a new endpoint is on. Read at each step. */
   language: () => Language;
@@ -168,9 +169,9 @@ function api(origin: string, language: () => Language): WebUiCall {
 
 interface VoiceState {
   enabled?: boolean;
-  engine?: 'funasr' | 'whisper' | 'system';
-  model?: { phase: 'absent' | 'working' | 'ready' | 'error'; done: number; total: number | null; bytes: number; detail: string | null };
-  input?: { mode?: 'hold' | 'toggle' | 'always'; hint?: string; keyLabel?: string; taps?: number };
+  /** Doubao's settings; of the API Key only whether one is saved. */
+  doubao?: { baseUrl?: string; keySaved?: boolean };
+  input?: { mode?: 'hold' | 'always'; hint?: string; keyLabel?: string; taps?: number };
 }
 
 /** Steps through the pet's bubble; a step the pet page was not there for waits for it and shows again. */
@@ -408,33 +409,11 @@ export async function runGuide(deps: GuideDeps): Promise<void> {
       else await step(5, 'key-later', { text: S.keySkipped, actions: ['sad'] });
     }
 
-    // 6 voice input
-    let voice = deps.pet()?.voiceState() as VoiceState | undefined;
-    if (voice?.enabled !== false && (voice?.engine === 'funasr' || voice?.engine === 'whisper') && voice.model && voice.model.phase !== 'ready') {
-      const mb = Math.round(voice.model.bytes / 1048576);
-      const d = await step(6, 'voice-download', {
-        text: S.askModel(voice.engine === 'whisper' ? 'Whisper' : 'FunASR', mb), actions: ['thinking'],
-        input: { kind: 'buttons', options: [{ label: S.download, primary: true }, { label: S.notNow }] },
-      });
-      if ('index' in d && d.index === 0) {
-        const bar = deps.pet()?.dialog({ text: S.downloading, step: [7, STEPS], input: { kind: 'progress', label: `${mb} MB` } });
-        void deps.pet()?.installVoice();
-        for (;;) {
-          await sleep(POLL_MS);
-          voice = deps.pet()?.voiceState() as VoiceState | undefined;
-          const m = voice?.model;
-          if (!m || m.phase === 'ready' || m.phase === 'error' || m.phase === 'absent') break;
-          bar?.update({ progress: m.total ? m.done / m.total : null });
-        }
-        bar?.close();
-        const ready = voice?.model?.phase === 'ready';
-        deps.track?.('voice_model', { result: ready ? 'ready' : 'failed' });
-        if (ready) await step(6, 'voice-ready', { text: S.downloaded, actions: ['love', 'hop'] });
-        else await step(6, 'voice-failed', { text: S.downloadFail(voice?.model?.detail ?? '?'), actions: ['sad'] });
-      } else {
-        deps.track?.('voice_model', { result: 'later' });
-        await step(6, 'voice-later', { text: S.modelLater });
-      }
+    // 6 voice input: Doubao's recognition, its API Key the one reading aloud uses too
+    const voice = deps.pet()?.voiceState() as VoiceState | undefined;
+    if (voice?.enabled !== false && voice?.doubao?.keySaved === false) {
+      deps.track?.('voice_key', { result: 'missing' });
+      await step(6, 'voice-key', { text: S.voiceKeyMissing, actions: ['thinking'], input: { kind: 'buttons', options: [{ label: S.gotIt, primary: true }] } });
     }
     // the World words the hint for the key and mode in force; the key cap acts out the taps and the hold
     const on = voice?.enabled !== false && !!voice?.input?.hint;
