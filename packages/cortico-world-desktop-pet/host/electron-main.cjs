@@ -26,6 +26,7 @@ const { createCursorSource } = require('./cursor.cjs');
 const { createMouseLease, FORWARD_MOVES } = require('./mouse-lease.cjs');
 const { createOverlaySource } = require('./overlay.cjs');
 const { createWindowSource, ledgesFrom, windowsFrom } = require('./windows.cjs');
+const { createAppStoreRule } = require('./app-store.cjs');
 
 /** The pages' text table of `code`, falling back as web/i18n.js does. */
 async function pageText(code) {
@@ -357,12 +358,16 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true }) {
 
   /** Moves the window over display `d`; returns the area it now covers. */
   const cover = (d) => {
+    const from = screen.getDisplayMatching(win.getBounds());
     displayId = d.id;
     const area = coverArea(d), { below, ...rect } = area;
-    win.setBounds(rect);
-    // Windows: a window moved onto a display with another scale factor is resized by the DPI
-    // change to its old size times the ratio of the two scales; once it is on the new display, the
-    // same bounds set again hold.
+    // Windows: setBounds converts the rect with the scale of the display the window is on. Onto a
+    // display with another scale the window comes out sized for the old one, can reach back over it
+    // and stay counted on it, so setting the rect again changes nothing. A 1x1 window at the new
+    // origin lies wholly on the new display, and the rect set after it holds.
+    if (process.platform === 'win32' && from.id !== d.id && from.scaleFactor !== d.scaleFactor) {
+      win.setBounds({ x: rect.x, y: rect.y, width: 1, height: 1 });
+    }
     win.setBounds(rect);
     // where the floor is: the page keeps it this far above the window's bottom
     win.webContents.send('pet:floor', below);
@@ -394,7 +399,10 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true }) {
     });
     cover(d);
     // Native candidate windows and Chromium popups must remain above the pet.
-    win.setAlwaysOnTop(true, process.platform === 'darwin' ? 'floating' : 'screen-saver');
+    const level = process.platform === 'darwin' ? 'floating' : 'screen-saver';
+    win.setAlwaysOnTop(true, level);
+    // macOS: behind the other windows while App Store is the active application
+    const appStore = createAppStoreRule({ window: win, level });
     // on every Space, and over an app in full screen
     if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
     win.setIgnoreMouseEvents(true, { forward: FORWARD_MOVES });
@@ -435,7 +443,7 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true }) {
       if (covered && !autoHidden && win.isVisible()) { autoHidden = true; win.hide(); }
       else if (!covered && autoHidden) { autoHidden = false; win.showInactive(); }
     }, FULLSCREEN_EVERY_MS);
-    win.on('closed', () => { clearInterval(cursorTimer); clearInterval(fullscreenTimer); watchWindows(false); win = null; });
+    win.on('closed', () => { appStore?.stop(); clearInterval(cursorTimer); clearInterval(fullscreenTimer); watchWindows(false); win = null; });
     // page console lines reach the World's log through stdout, with where an error came from
     win.webContents.on('console-message', (e) => { if (e.level !== 'debug') console.log(`[page:${e.level}] ${e.message}${e.stack ? `\n${e.stack}` : e.sourceId ? ` (${e.sourceId}:${e.lineNumber})` : ''}`); });
     win.webContents.on('did-fail-load', (_e, code, desc, failedUrl) => console.log(`[page:error] 加载失败 ${code} ${desc} ${failedUrl}`));
@@ -478,6 +486,7 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true }) {
   onPet('pet:hide', () => { releaseAutoHidden(); if (win) win.hide(); });
   onPet('pet:overlayFrame', (_e, rect, at) => overlay.frame(rect, at));
   onPet('pet:hideWhenFullscreen', (_e, on) => { hideWhenFullscreen = !!on; });
+  onPet('pet:clickThrough', (_e, on) => mouse.lock(on));
   onPet('pet:watchWindows', (_e, on) => watchWindows(!!on));
   onPet('pet:openDress', () => openDress());
   let language = 'zh';

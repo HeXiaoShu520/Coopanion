@@ -11,7 +11,7 @@ import { S as ru } from './strings.ru.ts';
 
 const zh = {
   copy: '复制',
-  copyNothing: '取不到要复制的内容',
+  copyNothing: '没有可复制的内容',
   copied: '已复制',
   copyFailed: '复制失败，已展开文本供手动选取',
   imageReadFailed: '读取图片失败',
@@ -31,6 +31,7 @@ const zh = {
   cancel: '取消',
   proceedAnyway: '仍要继续',
   confirm: '确认',
+  gotIt: '知道了',
   close: '✕ 关闭 (Esc)',
   tooManyImages: (max: number) => `一条消息最多 ${max} 张图`,
   messageInput: '消息输入',
@@ -64,6 +65,7 @@ export const en: typeof zh = {
   cancel: 'Cancel',
   proceedAnyway: 'Proceed anyway',
   confirm: 'Confirm',
+  gotIt: 'Got it',
   close: '✕ Close (Esc)',
   tooManyImages: (max: number) => `At most ${max} images per message`,
   messageInput: 'Message input',

@@ -9,7 +9,7 @@ import type { WebUi, WebUiSheet, Disposable } from 'cortico/web/shared/client-pa
 import { get } from '../../base/api.ts';
 import { createMemo } from '../../base/memo.ts';
 import { esc } from '../../base/ui/dom.ts';
-import { consoleFormat, formatMoney } from '../../base/ui/format.ts';
+import { consoleFormat, currencyName, currencySymbol, formatMoney } from '../../base/ui/format.ts';
 import { getThemeStudio } from '../../base/theme/studio.ts';
 import type { Page, PageContext } from '../../base/page.ts';
 import { intro as pageIntro } from '../intro.ts';
@@ -81,7 +81,7 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** abort 不是失败，是"这一页已经不在了"。 */
+/** 离开页面引起的 abort,不当作失败显示。 */
 function isAbort(err: unknown): boolean {
   return (err as { name?: unknown } | null)?.name === 'AbortError';
 }
@@ -160,20 +160,20 @@ export function mountUsage(ctx: PageContext): void {
   let currency = memo.get('currency', '');
   // 数据回来前先按记住的币种显示，免得选择框闪一下「自动」。
   const currencySelect = ui.select({
-    options: [{ value: '', label: S.autoCurrency }, ...(currency ? [{ value: currency, label: currency }] : [])],
+    options: [{ value: '', label: S.autoCurrency }, ...(currency ? [{ value: currency, label: currencyName(currency) }] : [])],
     onChange: value => { currency = value; memo.set('currency', value); void load(); },
   });
   currencySelect.value = currency;
   const basisSelect = ui.select({ options: [{value:'marginal',label:S.basisMarginal},{value:'equivalent',label:S.basisEquivalent}], onChange: value => { basis = value; void load(); } });
   basisSelect.setAttribute('aria-label', S.ledger);
-  // 换算币种的汇率与出处，只读
+  // 换算币种的汇率与出处，只读。放在「计费口径」左边：控件靠右排，它出现、变长只往左长，不推动选择框。
   const rateText = ui.h('span', 'ulabel');
   const rateSource = ui.h('span', 'ulabel ursrc');
   const rateBox = ui.h('span', 'urate');
   rateBox.append(rateText, rateSource);
   rateBox.hidden = true;
   const ledger = ui.h('span', 'uledger');
-  ledger.append(ui.h('span', 'ulabel', S.ledger), basisSelect, currencySelect, rateBox);
+  ledger.append(rateBox, ui.h('span', 'ulabel', S.ledger), basisSelect, currencySelect);
   headActions(ui, overview, ledger);
   const cards = ui.h('div', 'ukpis');
   const compBox = ui.h('div', 'ucomp');
@@ -449,14 +449,14 @@ export function mountUsage(ctx: PageContext): void {
     currencySelect.replaceChildren(...['', ...currencies].map(value => {
       const option = doc.createElement('option');
       option.value = value;
-      option.textContent = value || S.autoCurrency;
+      option.textContent = value ? currencyName(value) : S.autoCurrency;
       return option;
     }));
     currencySelect.value = currency;
     const shown = d.currency || 'USD';
     const rate = shown === 'USD' ? undefined : d.rates?.[shown];
     rateBox.hidden = rate === undefined;
-    if (rate !== undefined) rateText.textContent = `1 USD = ${Number(rate.toPrecision(5))} ${shown}`;
+    if (rate !== undefined) rateText.textContent = `${currencySymbol('USD')}1 = ${currencySymbol(shown)}${Number(rate.toPrecision(5))}`;
     renderRateSource(d.rateSources?.[shown]);
     billingNote.textContent = S.billingHint +
       (d.totals?.unknownUsageCalls ? S.unknownUsage(d.totals.unknownUsageCalls) : '');

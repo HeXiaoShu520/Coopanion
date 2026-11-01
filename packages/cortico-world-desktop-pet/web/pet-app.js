@@ -56,6 +56,8 @@ const prefs = {
   /** Frames a second while the body moves; 0 follows the display. */
   frameRate: 60,
   lockFrameRate: false,
+  /** Every click passes through the pet (the tray's "click through"): no hover buttons, and a bubble under the cursor does not wait. */
+  clickThrough: false,
 };
 // in a tab (the settings window's preview) the page is its own stage: a wall that answers the pointer, a floor with icons, a night/day button
 const modeBtn = host ? null : modeButton(document.body, () => prefs.theme, (theme) => applyPrefs({ theme }));
@@ -265,7 +267,7 @@ function restorePosition(startX, startY) {
   sentX = null;
   if (restored) return;
   restored = true;
-  // She starts facing the middle of the screen rather than always right (#59), so a pet
+  // She starts facing the middle of the screen, so a pet
   // resting on the right half is not turned away from the likely interaction area.
   if (host && typeof startX === 'number') {
     firstX = startX * innerWidth;
@@ -308,7 +310,7 @@ function applyPrefs(p) {
     // reading aloud follows the same switch: off, the reply being read stops
     if (!p.sound) voiceOut.stop();
   }
-  if (p.sounds && typeof p.sounds === 'object') sfx.configure({ kinds: p.sounds, snoreSeconds: p.sounds.snoreSeconds });
+  if (p.sounds && typeof p.sounds === 'object') sfx.configure({ kinds: p.sounds, snoreSeconds: p.sounds.snoreSeconds, panByPosition: p.sounds.panByPosition, volume: p.sounds.volume });
   if (p.speech && typeof p.speech === 'object') speech.configure(p.speech);
   // reading aloud: the World's pace and volume, applied to a reply already playing too
   if (p.tts && typeof p.tts === 'object') voiceOut.configure({ speed: p.tts.speed, volume: p.tts.volume });
@@ -331,6 +333,7 @@ function applyPrefs(p) {
   if (typeof p.frameRate === 'number' && p.frameRate >= 0) prefs.frameRate = p.frameRate;
   // the window process does the hiding; the page only passes the setting on
   if (typeof p.hideWhenFullscreen === 'boolean') host?.hideWhenFullscreen?.(p.hideWhenFullscreen);
+  if (typeof p.clickThrough === 'boolean') { prefs.clickThrough = p.clickThrough; host?.clickThrough?.(p.clickThrough); }
   if (Array.isArray(p.hoverButtons)) prefs.hoverButtons = p.hoverButtons.filter((id) => typeof id === 'string' && id in ACTIONS);
   if (p.bot) { prefs.bot = p.bot; if (!menu.hidden && !menu.querySelector('.m-head.confirm')) renderMenuHead(); }
   if (typeof p.language === 'string' && p.language !== language()) void switchLanguage(p.language);
@@ -515,8 +518,17 @@ function startItem(it) {
   }
 }
 
-/** The pointer is on Coo's bubble: a line's countdown stands still meanwhile, so it can be read to the end or its link clicked. */
-const pointedAt = () => !bubble.hidden && bubble.matches(':hover');
+/**
+ * The cursor is on Coo's bubble: a line's countdown stands still meanwhile, so it can be read to the end or its link
+ * clicked. Decided from where the cursor is now, as stepTools does: `:hover` stays with the last mouse event, and a
+ * click-through window stops getting them once the cursor has left.
+ */
+function pointedAt() {
+  const p = cursor.at;
+  if (prefs.clickThrough || bubble.hidden || !p) return false;
+  const r = bubble.getBoundingClientRect();
+  return p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom;
+}
 
 function stepDialog(dt) {
   if (!item && queue.length && at() && !at().busy) startItem(queue.shift());
@@ -1476,7 +1488,7 @@ function stepTools() {
   const p = cursor.at;
   const l = at();
   if (p && (body?.hit(p) || overTools(p))) toolsUntil = T + TOOLS_LINGER;
-  tools.hidden = !(T < toolsUntil && l && !l.pressing && !l.busy && menu.hidden && toolIds !== '');
+  tools.hidden = !(!prefs.clickThrough && T < toolsUntil && l && !l.pressing && !l.busy && menu.hidden && toolIds !== '');
   if (tools.hidden) endHold();
   tools.querySelector('[data-action="voice"]')?.classList.toggle('live', listen.phase === 'hearing');
 }
@@ -1695,7 +1707,7 @@ document.addEventListener('keydown', (e) => {
 /* ---------- layout ---------- */
 /**
  * Bubbles up to TAIL_CENTER wide (empty, or a word or two) point their tail from their middle; wider ones
- * move it over to Coo by TAIL_FOLLOW wide (#139). Between the two it slides, so a bubble growing as the line
+ * move it over to Coo by TAIL_FOLLOW wide. Between the two it slides, so a bubble growing as the line
  * types out carries its tail along with it.
  */
 const TAIL_CENTER = 70, TAIL_FOLLOW = 130;
@@ -1802,9 +1814,10 @@ function oklab(r, g, b) {
   const s = Math.cbrt(.0883024619 * r + .2817188376 * g + .6299787005 * b);
   return [.2104542553 * l + .793617785 * m - .0040720468 * s, 1.9779984951 * l - 2.428592205 * m + .4505937099 * s, .0259040371 * l + .7827717662 * m - .808675766 * s];
 }
-/** The body's color as [r, g, b], from `--skin-ink` (#rgb or #rrggbb). */
+/** The body's color as [r, g, b]: its palette's fixed body, else `--skin-ink` (#rgb or #rrggbb). */
 function inkRgb() {
-  let h = getComputedStyle(document.documentElement).getPropertyValue('--skin-ink').trim().replace('#', '');
+  const fixed = skin.figure === 'coo' ? PALETTES.find((p) => p.id === skin.palette)?.fixed?.body : null;
+  let h = (fixed ?? getComputedStyle(document.documentElement).getPropertyValue('--skin-ink')).trim().replace('#', '');
   if (h.length === 3) h = [...h].map((c) => c + c).join('');
   const n = parseInt(h, 16);
   return /^[0-9a-f]{6}$/i.test(h) ? [n >> 16, (n >> 8) & 255, n & 255] : null;
@@ -1876,8 +1889,7 @@ let last = performance.now(), dueAt = 0, gap = 0;
 let frameErr = null;
 /**
  * Frames whose timestamp was not past the one before (a zero or negative dt), and when that was last logged (ms):
- * one such frame used to leave the whale without hair, tail and skirt until restart (#87), and where these
- * timestamps come from is not known yet. Logged at most once a minute, with the count so far. The first frame is
+ * where these timestamps come from is not known yet. Logged at most once a minute, with the count so far. The first frame is
  * left out: `last` starts at the page's clock, which may be ahead of the first frame's timestamp.
  */
 let stalls = 0, stallLoggedAt = -Infinity, framed = false;

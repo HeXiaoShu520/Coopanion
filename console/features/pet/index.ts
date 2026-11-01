@@ -1,6 +1,6 @@
 /**
  * 「习惯」: the everyday settings of the desktop pet, in sections: 通用 (language, what Coo calls you, Coo's
- * name, the app's anonymous usage statistics in the `companion` group, core/telemetry.ts), 行为与互动, 显示,
+ * name, automatic updates and anonymous usage statistics in the `companion` group), 行为与互动, 显示,
  * 音效, 电脑操作 (features/cua) and 其他 (the OBS overlay, the Chat page's context ring). Every row names its
  * setting in the label column, except one that only refines the row above it. In each row the setting
  * comes first and what it means under it. An on/off setting is a switch; picks among several (sound
@@ -43,6 +43,7 @@ const GROUP = 'world:desktop-pet';
 const SOUND_GROUP = 'world:desktop-pet:sound';
 const STATS_GROUP = 'companion';
 const STATS_KEY = 'companion.telemetry';
+const AUTO_UPDATE_KEY = 'companion.autoUpdate';
 const STATS_DOC = 'https://github.com/Pal-AI-Lab/Coopanion/blob/main/docs/TELEMETRY.md';
 /** Whether the Chat page shows its context ring (features/chat/context.ts), in the `companion` group; off by default. */
 const RING_KEY = 'companion.contextRing';
@@ -69,7 +70,9 @@ const KEYS = {
   hideFullscreen: `${K}.window.hideWhenFullscreen`,
   overlay: `${K}.window.exportOverlay`,
   sound: `${K}.sound`,
+  volume: `${K}.sounds.volume`,
   snoreSeconds: `${K}.sounds.snoreSeconds`,
+  panByPosition: `${K}.sounds.panByPosition`,
   speech: `${K}.speech.enabled`,
   speechPitch: `${K}.speech.pitch`,
   speechPitchHz: `${K}.speech.pitchHz`,
@@ -152,6 +155,7 @@ async function mount(ctx: PageContext): Promise<void> {
   void invokePanel<{ defaultUser?: string }>(PET_PAGE, 'pet', 'state', [], opts).then((s) => { if (s?.defaultUser) user.placeholder = s.defaultUser; }).catch(() => {});
   const botName = ui.input();
   botName.placeholder = DEFAULT_NAME;
+  const autoUpdate = ui.checkbox(S.autoUpdate, { onChange: (on) => void save(AUTO_UPDATE_KEY, on, STATS_GROUP) });
   const roam = ui.segmented([
     { value: 'free', label: S.roamFree }, { value: 'calm', label: S.roamCalm }, { value: 'off', label: S.roamOff },
   ], { size: 'sm', onSelect: (v) => void save(KEYS.roam, v, GROUP, behaviorMsg) });
@@ -367,19 +371,21 @@ async function mount(ctx: PageContext): Promise<void> {
     }
   };
 
-  const row = (label: string, control: HTMLElement, hint?: string | HTMLElement) => {
+  const row = (label: string, control: HTMLElement, hint?: string | HTMLElement | readonly string[]) => {
     const r = ui.h('div', 'companion-row');
     const l = ui.h('div', 'companion-label', label);
     const c = ui.h('div', 'companion-control');
     // the setting first, what it means under it
     c.append(control);
-    if (hint) c.append(typeof hint === 'string' ? ui.h('p', 'home-note', hint) : hint);
+    if (hint) c.append(...typeof hint === 'string' ? [ui.h('p', 'home-note', hint)] : Array.isArray(hint) ? hint.map(text => ui.h('p', 'home-note', text)) : [hint as HTMLElement]);
     r.append(l, c);
     return r;
   };
   // the World declares this setting on Windows only; elsewhere its value never arrives and the row stays hidden
   const hideFullscreenRow = row(S.hideFullscreenLabel, hideFullscreen.el, S.hideFullscreenHint);
   hideFullscreenRow.hidden = true;
+  const autoUpdateRow = row(S.autoUpdateLabel, autoUpdate.el, S.autoUpdateHint);
+  autoUpdateRow.hidden = true;
 
   // sections: general, how Coo behaves and is reached, how it shows on the screen, sounds, computer use;
   // every row names its setting on the left, except one that only refines the row above it
@@ -387,6 +393,7 @@ async function mount(ctx: PageContext): Promise<void> {
     row(S.language, language, S.languageHint),
     row(S.user, user, S.userHint),
     row(S.botName, botName, S.botNameHint),
+    autoUpdateRow,
     row(S.statsLabel, statsBox, S.statsHint),
     msg,
   );
@@ -428,16 +435,36 @@ async function mount(ctx: PageContext): Promise<void> {
     kindBox.append(c.el);
     return [kind, c] as const;
   });
-  // the kinds only matter while sounds play at all
-  const renderKinds = () => { for (const [, c] of kinds) c.input.disabled = !sound.checked; };
+  const pan = ui.checkbox(S.pan, { onChange: (on) => { void save(KEYS.panByPosition, on, SOUND_GROUP, soundMsg); } });
+  // 音量: the same slider in whole percent, 0 to 100; saved once a drag or a key press ends
+  const volumeText = ui.h('span', 'companion-rangeval');
+  const volumeBox = ui.h('div', 'companion-rangebox');
+  const volume = scaleSlider(root.ownerDocument, {
+    min: 0, soft: 100, max: 100, step: 1, label: S.volume, format: (v) => `${v}%`,
+    room: () => volumeBox.clientWidth - volumeText.offsetWidth - 12,
+    onInput: () => showVolume(),
+    onChange: () => { showVolume(); void save(KEYS.volume, volume.value, SOUND_GROUP, soundMsg); },
+  });
+  volumeBox.append(volume.el, volumeText);
+  new ResizeObserver(() => volume.relayout()).observe(volumeBox);
+  const showVolume = () => { volumeText.textContent = `${volume.value}%`; };
+  const volumeRow = row(S.volume, volumeBox);
+  // the kinds, the volume and the panning only matter while sounds play at all
+  const renderKinds = () => {
+    for (const [, c] of kinds) c.input.disabled = !sound.checked;
+    pan.input.disabled = !sound.checked;
+    volumeRow.classList.toggle('is-off', !sound.checked);
+  };
   const snore = ui.input({ type: 'number' });
   snore.min = '0'; snore.max = '3600'; snore.step = '1';
   const snoreBox = ui.h('div', 'companion-rangebox');
   snoreBox.append(snore, ui.h('span', 'companion-rangeval', S.snoreUnit));
   sounds.body.append(
-    row(S.soundLabel, sound.el),
+    row(S.soundLabel, sound.el, S.worldScope),
+    volumeRow,
     row(S.soundKinds, kindBox, S.soundKindsHint),
     row(S.snore, snoreBox, S.snoreHint),
+    row(S.panLabel, pan.el, S.panHint),
     soundMsg,
   );
   /* ---------- speech ---------- */
@@ -498,7 +525,7 @@ async function mount(ctx: PageContext): Promise<void> {
     }
   };
   speechSheet.body.append(
-    row(S.speechTitle, speech.el, S.speechHint),
+    row(S.speechTitle, speech.el, [S.speechHint, S.worldScope]),
     pitchRow,
     speedRow,
     speechMsg,
@@ -607,6 +634,8 @@ async function mount(ctx: PageContext): Promise<void> {
       cua.sync(d.groups?.find((g) => g.group.id === CUA_GROUP)?.values ?? {});
     } catch { return; }
     if (typeof statsValues[STATS_KEY] === 'boolean') stats.setChecked(statsValues[STATS_KEY] as boolean);
+    autoUpdateRow.hidden = typeof statsValues[AUTO_UPDATE_KEY] !== 'boolean';
+    if (!autoUpdateRow.hidden) autoUpdate.setChecked(statsValues[AUTO_UPDATE_KEY] as boolean);
     ring.setChecked(statsValues[RING_KEY] === true);
     if (typeof statsValues[LANGUAGE_KEY] === 'string' && document.activeElement !== language) {
       // before the choices arrive the select keeps the value as a lone option
@@ -634,6 +663,8 @@ async function mount(ctx: PageContext): Promise<void> {
       const v = soundValues[`${K}.sounds.${kind}`];
       if (typeof v === 'boolean') c.setChecked(v);
     }
+    if (typeof soundValues[KEYS.panByPosition] === 'boolean') pan.setChecked(soundValues[KEYS.panByPosition] as boolean);
+    if (typeof soundValues[KEYS.volume] === 'number' && !volume.active && active !== volume.el) { volume.set(soundValues[KEYS.volume] as number); showVolume(); }
     renderKinds();
     if (typeof soundValues[KEYS.speech] === 'boolean') speech.setChecked(soundValues[KEYS.speech] as boolean);
     pitch.sync(soundValues);

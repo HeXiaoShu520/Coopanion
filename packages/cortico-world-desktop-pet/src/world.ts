@@ -45,7 +45,7 @@ import { DoubaoTts } from './voice/doubao-tts.ts';
 import { WakeWord, type WakeModule } from './voice/kws.ts';
 import { VoiceTurn, type TurnOptions } from './voice/turn.ts';
 import { Packer, Segmenter, rmsDb, type SegmentConfig, type SegmentSink, type Utterance } from './asr/segmenter.ts';
-import { comboLabel, hotkeyBadge, hotkeyLabel, parseHotkey, splitTaps, watchHotkey, type KeyWatcher } from './asr/hotkey.ts';
+import { comboLabel, hotkeyBadge, hotkeyLabel, parseHotkey, splitTaps, watchHotkey, type HotkeyTrigger, type KeyWatcher } from './asr/hotkey.ts';
 import { joinSpeech, looksHallucinated, type SpeechSentence } from './asr/result.ts';
 import { toSimplified } from './asr/simplify.ts';
 import { estimateSeconds, parseActions, parseScript, vocabChange, vocabTable, type VocabWord } from './script.ts';
@@ -80,7 +80,6 @@ const ENV_PROMPT_FILES: Record<ModelLanguage, string> = {
 /** Longest `pet_quiet`: a quiet that outlasts a day is a setting, which `pet_set` changes. */
 const QUIET_MAX_MIN = 24 * 60;
 const FRAME_MS = 20;
-const SAMPLE_RATE = 16_000;
 const WALK_TIMEOUT_MS = 30_000;
 /** Touches of one kind closer than this are reported as one event with a count. */
 const TOUCH_MERGE_MS = 2500;
@@ -338,6 +337,8 @@ export class DesktopPetWorld implements World {
   /** The syllables of the pet page's speech; its dictionaries load the first time a text needs them. */
   private readonly speechText = new SpeechText(SPEECH_DATA, join(WEB_DIR, 'speech', 'zh.json'));
   private windowHost: WindowHost | null = null;
+  /** The tray's "click through": every click passes through the pet window. Not saved: it lasts until the Core stops. */
+  private clickThrough = false;
   private readonly store: RuntimeStore;
   private doubao: DoubaoAsr | null = null;
   /** Reads the replies of a turn that came from the microphone; made with the server, which the page pulls from. */
@@ -959,6 +960,7 @@ export class DesktopPetWorld implements World {
       frameRate: this.cfg.window.frameRate,
       lockFrameRate: this.cfg.window.lockFrameRate,
       hideWhenFullscreen: this.cfg.window.hideWhenFullscreen,
+      clickThrough: this.clickThrough,
       language: this.appLanguage,
       user: this.userName,
       mic: this.micOpen(),
@@ -1258,11 +1260,12 @@ export class DesktopPetWorld implements World {
 
   /**
    * Asks the person in a bubble with two choices, the first one meaning yes, or three, the middle one
-   * meaning yes and from now on. Answers never reach the bot as events; the caller gets them.
+   * meaning yes and from now on. Answers never reach the bot as events; the caller gets them. A hidden
+   * pet's bubble cannot be seen, so the caller gets 'unavailable' at once, as with no pet page.
    */
   confirm(question: string, choices: [yes: string, no: string] | [yes: string, always: string, no: string]): Promise<ConfirmResult> {
     const id = nextId('k');
-    if (!this.server.sendPet({ t: 'confirm', id, question, options: choices })) return Promise.resolve('unavailable');
+    if (this.petHidden || !this.server.sendPet({ t: 'confirm', id, question, options: choices })) return Promise.resolve('unavailable');
     return new Promise((resolve) => {
       const timer = setTimeout(() => { this.confirms.delete(id); resolve('timeout'); }, CONFIRM_TIMEOUT_MS);
       this.confirms.set(id, { resolve, timer, choices: choices.length });
@@ -1511,11 +1514,16 @@ export class DesktopPetWorld implements World {
     return this.micMode() === 'hold' && this.talking ? { ...seg, thresholdDb: -Infinity, minSpeechMs: 0 } : seg;
   }
 
-  /** Starts, restarts or stops the key watcher to match the configured mode and key. */
+  /**
+   * Starts, restarts or stops the key watcher to match the configured mode and key. Hold to talk
+   * waits out a tap only while the typing key is the same key, so that key's double tap only types.
+   */
   private async syncHotkey(): Promise<void> {
     const { hotkey } = this.cfg.asr.mic;
     const mode = this.micMode();
-    const key = mode === 'always' || !this.host ? '' : `${mode}:${hotkey}`;
+    // the same key as the typing key's double tap: hold to talk waits out the tap (TAP_MAX_MS) first
+    const trigger: HotkeyTrigger = mode === 'hold' && this.typeKeyShares(hotkey) ? 'hold' : 'press';
+    const key = mode === 'always' || !this.host ? '' : `${mode}:${hotkey}:${trigger}`;
     if (key === this.hotkeyKey) return;
     this.hotkeyKey = key;
     this.keyWatcher?.stop();
@@ -1525,7 +1533,7 @@ export class DesktopPetWorld implements World {
     if (!key) return;
     const parsed = parseHotkey(hotkey);
     const watch = this.opts.watchHotkey ?? watchHotkey;
-    const watcher = parsed ? await watch(parsed, (down) => this.setTalking(down), HOTKEY_POLL_MS, () => this.onTalkTap(), this.ui.hotkey) : this.ui.voice.badKey(hotkey);
+    const watcher = parsed ? await watch(parsed, (down) => this.setTalking(down), HOTKEY_POLL_MS, () => this.onTalkTap(), this.ui.hotkey, trigger) : this.ui.voice.badKey(hotkey);
     if (key !== this.hotkeyKey) { if (typeof watcher !== 'string') watcher.stop(); return; }
     if (typeof watcher === 'string') {
       this.hotkeyProblem = watcher;
@@ -1533,7 +1541,16 @@ export class DesktopPetWorld implements World {
     } else this.keyWatcher = watcher;
   }
 
-  /** Starts, restarts or stops the typing key's watcher to match `typeKey`; a press opens the pet's typing box. */
+  /** The typing key is on and made of the same keys as `talk`, press counts aside. */
+  private typeKeyShares(talk: string): boolean {
+    const { enabled, hotkey } = this.cfg.typeKey;
+    const a = parseHotkey(talk), b = parseHotkey(hotkey);
+    if (!enabled || !a || !b) return false;
+    const keys = new Set(b.keys);
+    return new Set(a.keys).size === keys.size && a.keys.every((vk) => keys.has(vk));
+  }
+
+  /** Starts, restarts or stops the typing key's watcher; multi-press shortcuts require completed quick taps. */
   private async syncTypeKey(): Promise<void> {
     const { enabled, hotkey } = this.cfg.typeKey;
     const key = enabled && this.host ? hotkey : '';
@@ -1548,7 +1565,7 @@ export class DesktopPetWorld implements World {
     const text = { ...this.ui.hotkey, ...this.ui.typeKey };
     // a hidden pet stays hidden: its typing box would open out of sight
     const onPress = (down: boolean) => { if (down && !this.petHidden) this.server.sendPet({ t: 'type' }); };
-    const watcher = parsed ? await watch(parsed, onPress, HOTKEY_POLL_MS, undefined, text) : this.ui.voice.badKey(hotkey);
+    const watcher = parsed ? await watch(parsed, onPress, HOTKEY_POLL_MS, undefined, text, parsed.taps > 1 ? 'tap' : 'press') : this.ui.voice.badKey(hotkey);
     if (key !== this.typeKeyKey) { if (typeof watcher !== 'string') watcher.stop(); return; }
     if (typeof watcher === 'string') {
       this.typeKeyProblem = watcher;
@@ -1980,9 +1997,11 @@ export class DesktopPetWorld implements World {
       this.endWake();
       this.counts.delivered++;
       this.server.sendPet({ t: 'listen', phase: 'heard', text });
-      // these words came from the microphone: what Coo answers them is read aloud
+      // these words came from the microphone: what Coo answers them is read aloud; through the talk key they
+      // stop the round, while always listening also hears a TV or other people, so those only wake
       this.turn.heard();
-      void this.push('desktop-pet.speech', 'desktop-pet.voice', this.t.heard(this.userName, text), 'flush', { meta: { text } });
+      const trigger = this.micMode() === 'always' ? 'flush' : 'interrupt';
+      void this.push('desktop-pet.speech', 'desktop-pet.voice', this.t.heard(this.userName, text), trigger, { meta: { text } });
       return;
     }
     if (this.segmenter.active || this.transcribing || this.queue.length > 0) this.setListenOpen(true);
@@ -2300,6 +2319,8 @@ export class DesktopPetWorld implements World {
         case 'closeWindow': await this.windowHost?.stop(); return this.petState();
         // hides the window as the pet's menu does; it stays connected and comes back with openWindow
         case 'hideWindow': this.server.sendPet({ t: 'hide' }); return this.petState();
+        // the tray's "click through": kept for this run only, and sent again to a window that reconnects
+        case 'setClickThrough': this.clickThrough = args[0] === true; this.server.sendPet({ t: 'prefs', clickThrough: this.clickThrough }); return this.petState();
         case 'installElectron': void this.store.electron.install(); return this.petState();
         // the Habits page's custom picks (/api/config writes no list or map): `custom` and its picks in one write, as the person's change
         case 'setWakeKinds': {
@@ -2322,6 +2343,8 @@ export class DesktopPetWorld implements World {
           if (typeof raw.hotkey === 'string' && parseHotkey(raw.hotkey)) typeKey.hotkey = raw.hotkey;
           this.opts.persist({ typeKey });
           await this.syncTypeKey();
+          // the talk key's trigger depends on the typing key
+          await this.syncHotkey();
           return this.petState();
         }
         case 'guide': {
@@ -2400,6 +2423,7 @@ export class DesktopPetWorld implements World {
   petState(): Record<string, unknown> {
     return {
       connected: this.server.petConnected,
+      clickThrough: this.clickThrough,
       /** The connected pet page is the window's, not a browser page standing in for it. */
       inWindow: this.server.petInWindow,
       /** The pet window is connected and shown (hidden from its menu or the tray, it stays connected). */
