@@ -105,6 +105,15 @@ describe('English model text', () => {
   });
 });
 
+describe('the Chinese environment prompt', () => {
+  it('renders with no placeholder left behind: every variable the template uses, the World fills', async () => {
+    const { world } = await mounted((c) => { c.user = '小王'; });
+    const doc = world.webUi().promptDocs![0]!;
+    const prompt = renderTemplate(readFileSync(doc.path, 'utf8'), await world.envPromptVars());
+    expect(prompt).not.toMatch(/\{\{/);
+  });
+});
+
 describe('tools without a page', () => {
   it('does not install an output tap without a connected pet page', async () => {
     const { world } = await mounted();
