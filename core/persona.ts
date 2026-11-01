@@ -45,6 +45,8 @@ export const MEMORY_NOTE = [
     + 'When a fact changes, rewrite it where it stands; delete what is no longer true.',
   '- What goes in about the person is what they said, or what you saw or heard more than once. What you guessed, '
     + 'and what you said yourself, is not evidence however often you said it.',
+  '- What the person tells you to do or stop doing from now on ("stop calling me that", "never bring up X again") holds '
+    + 'until they take it back: write it in your notes on them and go on following it in later sessions.',
   '- What you wrote before can stop being true. Check a line written long ago against what they say or do now, '
     + 'and rewrite or drop it once it has changed.',
   '- Anything tied to a time has its date in the name: a running log one file per month (log/2026-10.md), one day\'s events by the day.',
