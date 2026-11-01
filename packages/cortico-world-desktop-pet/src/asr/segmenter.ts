@@ -219,6 +219,17 @@ export class Segmenter {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * 末尾挂着连接词、逗号或破折号时,这一句多半还没说完:一声气口不等于一句话说完。
+ * 只是启发式(模型补全语义的廉价替代):打包层据此多等一个窗口,等到就并进去,
+ * 等不到照发。猜错的代价是晚一点,不是吞掉一句话。
+ */
+const OPEN_END = /(?:[,，、:：;；…—–-]|\b(?:and|or|but|because|if|then|with|for|of|to|at|in|on|the|a|an)|和|跟|与|或|还有|然后|所以|但是|因为|如果|而且|并且|以及|就是|比如|虽然|只要|只有|即使|哪怕|要是|或者说|是)$/u;
+
+export function looksUnfinished(text: string): boolean {
+  return OPEN_END.test(text.trim());
+}
+
 export interface PackConfig {
   /** 少于这么多字的识别结果丢掉:噪声与语气词识别出来常是一两个字 */
   minChars: number;
@@ -235,6 +246,11 @@ export class Packer {
 
   get pending(): boolean {
     return this.pieces.length > 0;
+  }
+
+  /** 已收下的结果拼起来的样子,不取走:发出去之前先看这一句是不是说完了 */
+  peek(): string {
+    return joinSpeech(this.pieces);
   }
 
   /** 太短的直接丢,返回 false 表示这句没被收下 */

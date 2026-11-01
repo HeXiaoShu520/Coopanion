@@ -1,4 +1,4 @@
-<!-- Owner: src/definition.ts, src/cua/cua.ts, src/cua/engine/user-activity.ts, src/cua/engine/wait-idle.ts, src/cua/engine/foreground.ts, src/world.ts, src/asr/hotkey.ts, src/voice/, web/mic.js, host/app-store.cjs -->
+<!-- Owner: src/definition.ts, src/cua/cua.ts, src/cua/engine/user-activity.ts, src/cua/engine/wait-idle.ts, src/cua/engine/foreground.ts, src/mind.ts, src/world.ts, src/asr/hotkey.ts, src/voice/, web/mic.js, host/app-store.cjs -->
 
 <p align="center">
   <picture>
@@ -29,6 +29,7 @@ bot 在屏幕底边有一个小身体,由一个形象包提供(见下文):内置
 运行中换了形象,`[figure]` 事件或 `pet_set` 的回执写明词表相对 bot 上次得知的变化:用不了的词,以及新增或样子变了的词的表格行。
 身体加载好时报出它认得的词(kit 的身体都报),`vocab` 里身体不认得的词不给 bot 用,并在日志里记一条。
 形象包自己的移动目标同样渲染进环境提示词(`{{pet.moves}}`,没有时为空),换了形象时同样写明增删了哪些目标。
+环境提示词里还有两处随对话变:`{{pet.recent}}` 列出 bot 最近说过的几句(每句截到 60 字,最多 6 句),`{{pet.mind}}` 在它累了、精神好或被逗高兴时说一句自己的状态,平常为空。两处都只影响它怎么说,不改工具、事件和投递。
 `pet_move_to` 的参数不随形象变,换装不改工具表。
 词表里没有的词,`pet_say` 和 `pet_act` 的回执会写明略过了哪些。
 
@@ -45,7 +46,7 @@ bot 在屏幕底边有一个小身体,由一个形象包提供(见下文):内置
 每条事件的正文前是对方那边的本地时间 `[HH:MM]`;一次运行的第一条、换了日期后的第一条带日期和星期 `[MM-DD 周X HH:MM]`。
 表里是中文版;模型文本是英文时,标签是 `[voice]` `[typed]` `[answer]` `[touch]` `[figure]`,星期写 `Sun` 这样的英文缩写。
 
-同一种互动 2.5 秒内连着来,并成一条带次数的事件。`wakeOn`(「习惯」页的「回应模式」)默认 `poke`:只有戳唤醒,摸头、放下和甩出跟着下一批送;`all` 都唤醒;`none` 都跟着下一批送;`custom` 只有 `touch.wakeKinds` 里的种类(`poke` `pet` `throw` `drop`,摔晕算在它结束的那次甩出或放下里)唤醒。鼠标划过桌宠也算摸头,拖开挡路的桌宠也算放下。一条互动按 debounce 送出后,到 bot 下一次结束一轮前,其余互动都按 piggyback 送。「伙伴」取自 `worlds.desktop-pet.user`,空着时是应用语言的默认称呼(`src/i18n`)。
+同一种互动 2.5 秒内连着来,并成一条带次数的事件。`wakeOn`(「习惯」页的「回应模式」)默认 `poke`:只有戳唤醒,摸头、放下和甩出跟着下一批送;`all` 都唤醒;`none` 都跟着下一批送;`custom` 只有 `touch.wakeKinds` 里的种类(`poke` `pet` `throw` `drop`,摔晕算在它结束的那次甩出或放下里)唤醒。鼠标划过桌宠也算摸头,拖开挡路的桌宠也算放下。一条互动按 debounce 送出后,到 bot 下一次结束一轮前,其余互动都按 piggyback 送。每条 `[touch]` 末尾注明这条有没有叫醒 bot:叫醒了、设置里这种互动不叫,或这一轮已经叫过一次;叫醒只是把开口的机会交给它,说不说话由它决定(`src/ENV_PROMPT.md`)。「伙伴」取自 `worlds.desktop-pet.user`,空着时是应用语言的默认称呼(`src/i18n`)。
 
 ## 桌宠窗口
 
@@ -163,6 +164,7 @@ overlay 页按画出的时刻显示各帧，帧与帧隔开的时间和桌宠页
 
 桌宠窗口里的页面用麦克风收音,16 kHz 单声道 PCM 经 WebSocket 送到 World,按能量门限切句
 (`src/asr/segmenter.ts`),交给豆包的流式识别,挡掉已知幻觉后作为 `desktop-pet.speech` 投递;应用语言是简体中文且 `asr.simplified` 开着时先把繁体转成简体。
+一句收尾静音过后,末尾还挂着连接词或逗号的(`looksUnfinished`)再多等 1.2 秒,把接着说的后半句并进同一句再投递;没有后半句就照发。
 说话时桌宠歪头倾听,虚线气泡里边说边显示听到的字,还没定下来的部分是灰色的。识别完成后这个气泡留在 Coo 旁边(见「桌宠窗口」)。
 按住说话键收音时气泡里有「取消」按钮:桌宠页发 `cancel`,World 丢掉这次收音手上的音频、转写队列和已识别的文字,在途的转写落地后也丢掉,发 `listen` 的 `none`,不投递事件。
 

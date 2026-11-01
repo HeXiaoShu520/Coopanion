@@ -182,6 +182,32 @@ describe('with a pet page', () => {
     expect(out.text).toContain('飞');
   });
 
+  it('tells the bot what it said lately, newest last and at most six lines, so the next bubble need not repeat it', async () => {
+    const { world } = await mounted();
+    const page = await FakePage.open(origin(world));
+    cleanup.push(() => page.close());
+    expect((await world.envPromptVars())['pet.recent']).toBe('');
+    for (const n of ['一', '二', '三', '四', '五', '六', '七']) {
+      await tool(world, 'pet_say').handler({ script: `第${n}句` }, ctx);
+      await page.next((m) => m.t === 'say');
+    }
+    const recent = (await world.envPromptVars())['pet.recent'] as string;
+    expect(recent).not.toContain('第一句');
+    expect(recent.indexOf('第二句')).toBeGreaterThan(-1);
+    expect(recent.indexOf('第二句')).toBeLessThan(recent.indexOf('第七句'));
+    expect(recent).toContain('对方刚听过的话不要再说一遍');
+  });
+
+  it('tells the bot how it feels after many pokes, and says nothing while nothing stands out', async () => {
+    const { world, host } = await mounted();
+    const page = await FakePage.open(origin(world));
+    cleanup.push(() => page.close());
+    expect((await world.envPromptVars())['pet.mind']).toBe('');
+    for (let i = 0; i < 40; i++) page.send({ t: 'touch', kind: 'poke' });
+    await expect.poll(() => host.events.length, { timeout: 6000 }).toBe(1);
+    expect((await world.envPromptVars())['pet.mind']).toContain('困');
+  });
+
   it('pet_ask delivers the chosen option as an answer event that wakes', async () => {
     const { world, host } = await mounted();
     const page = await FakePage.open(origin(world));
@@ -334,7 +360,7 @@ describe('with a pet page', () => {
     cleanup.push(() => page.close());
     for (let i = 0; i < 3; i++) page.send({ t: 'touch', kind: 'poke' });
     await expect.poll(() => host.events.length, { timeout: 6000 }).toBe(1);
-    expect(host.events[0]).toMatchObject({ type: 'desktop-pet.touch', text: '[touch] 伙伴戳了你 3 下' });
+    expect(host.events[0]).toMatchObject({ type: 'desktop-pet.touch', text: '[touch] 伙伴戳了你 3 下(这条叫醒了你)' });
     expect(host.pushOpts[0]).toEqual({ trigger: 'debounce' });
   });
 
@@ -353,6 +379,10 @@ describe('with a pet page', () => {
     page.send({ t: 'touch', kind: 'poke' });
     await expect.poll(() => host.events.length, { timeout: 6000 }).toBe(5);
     expect(host.pushOpts.map((o) => o?.trigger)).toEqual(['piggyback', 'piggyback', 'debounce', 'piggyback', 'debounce']);
+    // each line says why it did or did not wake the bot: a pet never does, a second poke in the same turn does not
+    expect(host.events[0].text).toContain('(这条没叫醒你:设置里这种互动不叫你)');
+    expect(host.events[2].text).toContain('(这条叫醒了你)');
+    expect(host.events[3].text).toContain('(这条没叫醒你:这一轮已经叫过一次)');
   });
 
   it('reports a throw that ends in a crash as one event', async () => {
@@ -363,7 +393,7 @@ describe('with a pet page', () => {
     page.send({ t: 'touch', kind: 'throw', x: 300 });
     page.send({ t: 'touch', kind: 'crash' });
     await expect.poll(() => host.events.length, { timeout: 6000 }).toBe(1);
-    expect(host.events[0].text).toBe('[touch] 伙伴把你拎起来甩了出去,你重重落地,摔晕了一会儿');
+    expect(host.events[0].text).toBe('[touch] 伙伴把你拎起来甩了出去,你重重落地,摔晕了一会儿(这条没叫醒你:设置里这种互动不叫你)');
   });
 
   it('sends no touch events when touch reporting is off', async () => {

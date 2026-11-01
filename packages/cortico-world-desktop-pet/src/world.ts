@@ -44,7 +44,7 @@ import type { SocketOpen } from './voice/socket.ts';
 import { DoubaoTts } from './voice/doubao-tts.ts';
 import { WakeWord, type WakeModule } from './voice/kws.ts';
 import { VoiceTurn, type TurnOptions } from './voice/turn.ts';
-import { Packer, Segmenter, rmsDb, type SegmentConfig, type SegmentSink, type Utterance } from './asr/segmenter.ts';
+import { Packer, Segmenter, looksUnfinished, rmsDb, type SegmentConfig, type SegmentSink, type Utterance } from './asr/segmenter.ts';
 import { comboLabel, hotkeyBadge, hotkeyLabel, parseHotkey, splitTaps, watchHotkey, type HotkeyTrigger, type KeyWatcher } from './asr/hotkey.ts';
 import { joinSpeech, looksHallucinated, type SpeechSentence } from './asr/result.ts';
 import { toSimplified } from './asr/simplify.ts';
@@ -58,6 +58,7 @@ import { CUA_OFF_TOOL_DECLS } from './cua/tools.ts';
 import type { Answer } from './cua/engine-ipc.ts';
 import { PackImporter } from './pack-import.ts';
 import { dressTable, planSettings, type SettingChange } from './self.ts';
+import { CatMind } from './mind.ts';
 import { MODEL_TEXT, type ModelLanguage, type ModelText } from './model-text.ts';
 
 /** The console panels, titled in `language`. */
@@ -83,6 +84,11 @@ const FRAME_MS = 20;
 const WALK_TIMEOUT_MS = 30_000;
 /** Touches of one kind closer than this are reported as one event with a count. */
 const TOUCH_MERGE_MS = 2500;
+/** How many of the pet's latest lines `{{pet.recent}}` carries, and how much of each. */
+const RECENT_MAX = 6;
+const RECENT_CHARS = 60;
+/** How long a packed sentence that ends on a connective waits for the rest before it goes out alone. */
+const REST_HOLD_MS = 1200;
 /** How long a confirmation bubble waits for an answer. */
 const CONFIRM_TIMEOUT_MS = 60_000;
 /** History events read per chat page load; the page asks for the ones before by cursor. */
@@ -254,6 +260,9 @@ interface PendingWalk {
   target?: string;
   /** The call's interrupt asked the page to stop the walk. */
   stopping?: boolean;
+  /** Where a default-target walk started and ends, as a share of the screen's width; absent for the mouse pointer, whose x is unknown. */
+  fromX?: number;
+  toX?: number;
 }
 
 interface PendingAsk {
@@ -373,6 +382,9 @@ export class DesktopPetWorld implements World {
   private readonly queue: Utterance[] = [];
   private transcribing = false;
   private packTimer: NodeJS.Timeout | null = null;
+  /** The packed sentence is held once for a rest that may still be coming, until this moment. */
+  private restHeld = false;
+  private restUntil = 0;
   private wasSpeaking = false;
   /** Whether a held talk key has heard anything at all: let go over silence, the listening it opened ends. */
   private talkHeard = false;
@@ -398,6 +410,10 @@ export class DesktopPetWorld implements World {
   private readonly voiceSockets = new Set<WorldStreamSocket>();
   private lastLevelAt = 0;
   private readonly heard: HeardLine[] = [];
+  /** What the pet said lately, oldest first, for `{{pet.recent}}`: a line about the same thing twice reads as a repeat. */
+  private readonly recentLines: string[] = [];
+  /** How the pet feels between interactions, for `{{pet.mind}}`; it decides nothing on its own. */
+  private readonly mind = new CatMind();
   private readonly counts = { utterances: 0, delivered: 0, dropped: 0 };
   private micState: { state: string; detail: string | null } = { state: 'off', detail: null };
   private devices: Array<{ id: string; label: string }> = [];
@@ -1166,6 +1182,8 @@ export class DesktopPetWorld implements World {
         if (!w) return;
         this.walks.delete(String(msg.walkId));
         clearTimeout(w.timer);
+        // the body walked that far: the distance counts towards how tired it is, not the order
+        if (msg.t === 'arrived' && w.fromX !== undefined && w.toX !== undefined) this.mind.walk(w.toX - w.fromX);
         const t = this.t;
         const at = (typeof msg.x === 'number' ? pct(msg.x) : '?') + (typeof msg.y === 'number' ? t.downAt(pct(msg.y)) : '');
         // what stopped a figure's own move is its body's word, kept short
@@ -1348,6 +1366,7 @@ export class DesktopPetWorld implements World {
     if (!this.cfg.touch.enabled) return;
     const kind = String(msg.kind);
     if (kind === 'grab') return;
+    if (kind === 'poke' || kind === 'pet' || kind === 'throw' || kind === 'drop' || kind === 'crash') this.mind.touch(kind);
     if (kind === 'crash' && this.touch && (this.touch.kind === 'throw' || this.touch.kind === 'drop')) {
       this.touch.crashed = true;
       return;
@@ -1384,8 +1403,9 @@ export class DesktopPetWorld implements World {
       default: return;
     }
     const wakes = !this.touchWoke && touchWakes(this.cfg.touch, t.kind);
+    const why = wakes ? m.wake.woke : this.touchWoke ? m.wake.quietTurn : m.wake.quietSetting;
     if (wakes) this.touchWoke = true;
-    void this.push('desktop-pet.touch', 'desktop-pet.touch', m.touch(text), wakes ? 'debounce' : 'piggyback',
+    void this.push('desktop-pet.touch', 'desktop-pet.touch', m.touch(text, why), wakes ? 'debounce' : 'piggyback',
       { meta: { touch: { kind: t.kind, count: t.count, woke: t.woke, crashed: t.crashed } } });
   }
 
@@ -1978,8 +1998,20 @@ export class DesktopPetWorld implements World {
   private schedulePack(): void {
     const upstream = this.transcribing || this.queue.length > 0;
     // a commit does not wait for the closing pause, nor for speech begun after it
-    const hold = upstream || (!this.committing && (this.segmenter.active || this.segmenter.settleRemainingMs > 0));
+    let hold = upstream || (!this.committing && (this.segmenter.active || this.segmenter.settleRemainingMs > 0));
+    // a sentence that breaks off on a connective gets one more window for the rest; a rest that
+    // arrives, or the window closing, sends what is there
+    if (this.restHeld && (Date.now() >= this.restUntil || !looksUnfinished(this.packer.peek()))) this.restHeld = false;
+    if (!hold && !this.committing && this.packer.pending && !this.restHeld && looksUnfinished(this.packer.peek())) {
+      this.restHeld = true;
+      this.restUntil = Date.now() + REST_HOLD_MS;
+    }
+    if (this.restHeld) hold = true;
     const text = this.committing && !upstream ? this.packer.take() : this.packer.due(hold);
+    if (!this.packer.pending) {
+      this.restHeld = false;
+      this.restUntil = 0;
+    }
     if (this.committing && !upstream && !text) {
       // nothing was heard: the committed episode closes empty, unless the talk key still holds it open
       this.committing = false;
@@ -2069,6 +2101,7 @@ export class DesktopPetWorld implements World {
     if (spoken) this.turn.reply(id, said);
     void this.closeActivity();
     void this.record({ kind: 'say', beats: beats.map((b) => ({ text: b.text, ...moodOf(b.actions, this.vocab()) })) }, said, shown.blobs);
+    if (spoken) this.rememberSaid(said);
     if (!spoken) return { text: this.t.imagesShown(shown.blobs.length, this.chat.size > 0) };
     const now = Date.now();
     const selfSec = estimateSeconds(beats, this.cfg.window.bubbleSpeed, this.cfg.speech.enabled ? speechTextSteps : undefined);
@@ -2077,6 +2110,15 @@ export class DesktopPetWorld implements World {
     const replaced = this.ask?.question ?? null;
     if (this.ask) this.setAsk(null);
     return { text: this.t.sayReceipt({ waitSec, selfSec, chatOpen: this.chat.size > 0, replaced, dropped, images: shown.blobs.length }) };
+  }
+
+  /** Keeps a line the pet just said for `{{pet.recent}}`; the oldest goes first, and each line is cut short. */
+  private rememberSaid(text: string): void {
+    const line = text.replace(/\s+/g, ' ').trim();
+    if (!line) return;
+    const chars = Array.from(line);
+    this.recentLines.push(chars.length > RECENT_CHARS ? `${chars.slice(0, RECENT_CHARS).join('')}…` : line);
+    if (this.recentLines.length > RECENT_MAX) this.recentLines.shift();
   }
 
   /**
@@ -2146,7 +2188,10 @@ export class DesktopPetWorld implements World {
         this.walks.delete(walkId);
         done(target === undefined ? t.walkTimeout(WALK_TIMEOUT_MS / 1000) : t.moveTimeout(target, WALK_TIMEOUT_MS / 1000));
       }, WALK_TIMEOUT_MS);
-      const walk: PendingWalk = { resolve: done, timer, ...(target === undefined ? {} : { target }) };
+      const walk: PendingWalk = {
+        resolve: done, timer, ...(target === undefined ? {} : { target }),
+        ...(order.kind === 'walk' && typeof order.to === 'number' ? { fromX: this.standX ?? this.cfg.petX ?? 0.5, toX: order.to } : {}),
+      };
       this.walks.set(walkId, walk);
       ctx?.signal?.addEventListener('abort', onAbort, { once: true });
     });
@@ -2247,6 +2292,8 @@ export class DesktopPetWorld implements World {
       'pet.self': this.selfText(),
       'pet.chat': this.opts.controls?.openChat ? t.chatPage(user) : '',
       'pet.reply': reply ? t.reply(user, reply) : '',
+      'pet.recent': this.recentLines.length ? t.recent(user, this.recentLines) : '',
+      'pet.mind': this.mind.line(t.mind, user),
     };
   }
 
@@ -2305,7 +2352,7 @@ export class DesktopPetWorld implements World {
         ...c.envPrompt,
         path: this.envPromptFile(),
         role: 'envPrompt',
-        vars: ['pet.user', 'pet.vocab', 'pet.moves', 'pet.voice', 'pet.body', 'pet.dress', 'pet.self', 'pet.chat', 'pet.reply', 'pet.cua']
+        vars: ['pet.user', 'pet.vocab', 'pet.moves', 'pet.voice', 'pet.body', 'pet.dress', 'pet.self', 'pet.chat', 'pet.reply', 'pet.recent', 'pet.mind', 'pet.cua']
           .map((name) => ({ name, description: c.vars[name] ?? name, ...(name === 'pet.vocab' || name === 'pet.moves' || name === 'pet.dress' || name === 'pet.cua' ? { multiline: true } : {}) })),
       }],
     };

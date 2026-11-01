@@ -47,7 +47,13 @@ const zh = {
   answerPicked: (user: string, question: string, n: number, option: string) => `[answer] ${user}回答「${question}」:选了第 ${n} 项「${option}」`,
   answerWrote: (user: string, question: string, text: string) => `[answer] ${user}回答「${question}」:自己写了:「${text}」`,
 
-  touch: (text: string) => `[touch] ${text}`,
+  touch: (text: string, why: string) => `[touch] ${text}${why}`,
+  /** Why a touch's event did or did not wake the bot, in the touch line itself. */
+  wake: {
+    woke: '(这条叫醒了你)',
+    quietSetting: '(这条没叫醒你:设置里这种互动不叫你)',
+    quietTurn: '(这条没叫醒你:这一轮已经叫过一次)',
+  },
   pokedAwake: (user: string) => `${user}把睡着的你戳醒了`,
   poked: (user: string, n: number) => (n > 1 ? `${user}戳了你 ${n} 下` : `${user}戳了你一下`),
   pettedAsleep: (user: string) => `${user}摸了摸睡着的你`,
@@ -161,6 +167,15 @@ const zh = {
   chatPage: (_user: string) => '应用的「对话」页按时间列出这些气泡、对方的话,以及你两句话之间调用过的工具名;对方也能在那里打字、发图片(同样是 `[typed]` 事件,图片接在正文后),回答 `pet_ask`。`pet_say` 带的 `images` 只显示在对话页,头顶气泡不显示。',
   /** `{{pet.voice}}` while replies are read aloud: a spoken turn is heard, so the words must sound right spoken. */
   voiceRead: '语音输入开着;用语音问的那一轮,你的回答会被朗读成声音:少用列表、代码块和括号里的补充,句子短一点、像说话。',
+  /** `{{pet.recent}}`: what the pet said lately, newest last, so it does not say the same thing again. */
+  recent: (user: string, lines: string[]) => `你最近对${user}说过这些,新说的在最后:\n${lines.map((line) => `- ${line}`).join('\n')}\n再提同一个话题前先换个角度;对方刚听过的话不要再说一遍。`,
+  /** `{{pet.mind}}`: how Coo feels now; empty while nothing stands out. */
+  mind: {
+    tired: (user: string) => `你现在很困:动作和话都慢一点;${user}没在叫你的时候,可以安静待着。`,
+    low: (_user: string) => '你现在有点累,没有刚醒来时那么有精神。',
+    fresh: (_user: string) => '你现在精神很好,做什么都带劲。',
+    warm: (user: string) => `${user}刚和你玩了一会儿,你还挺高兴。`,
+  },
   /** `{{pet.cua}}` while computer use is off on a system that runs it. */
   cuaOff: (user: string, canOpen: boolean) => `## 电脑操作\n\n电脑操作现在关着:你看不到屏幕,也动不了鼠标和键盘。${user}想让你看屏幕或帮忙操作电脑时,可以提出打开它:在设置窗口「习惯」页的「电脑操作」一节,打开前那里会讲清风险。` +
     (canOpen ? `${user}同意去打开的话,\`pet_cua_open_settings\` 把设置窗口直接打开到那里。` : ''),
@@ -180,7 +195,12 @@ const en: typeof zh = {
   answerPicked: (user, question, n, option) => `[answer] ${user} answered "${question}": picked option ${n}, "${option}"`,
   answerWrote: (user, question, text) => `[answer] ${user} answered "${question}" in their own words: "${text}"`,
 
-  touch: (text) => `[touch] ${text}`,
+  touch: (text, why) => `[touch] ${text}${why}`,
+  wake: {
+    woke: ' (this one woke you)',
+    quietSetting: ' (this one did not wake you: the settings do not wake you for this kind of touch)',
+    quietTurn: ' (this one did not wake you: you were already woken once this turn)',
+  },
   pokedAwake: (user) => `${user} poked you awake`,
   poked: (user, n) => (n > 1 ? `${user} poked you ${n} times` : `${user} poked you`),
   pettedAsleep: (user) => `${user} patted you while you were asleep`,
@@ -285,6 +305,13 @@ const en: typeof zh = {
   // the English template puts these right after a sentence, so they start with a space
   chatPage: (user) => ` The app's Chat page lists these bubbles in time order, with what ${user} said and the names of the tools you called between two lines; ${user} can also type and send images there (they arrive as \`[typed]\` events too, images after the text) and answer \`pet_ask\`. The \`images\` of \`pet_say\` show only on the Chat page, not in the bubble.`,
   voiceRead: 'Voice input is on, and in a turn asked by voice your answer is read aloud: skip lists, code blocks and asides in brackets, and keep sentences short and spoken.',
+  recent: (user, lines) => `This is what you said to ${user} lately, newest last:\n${lines.map((line) => `- ${line}`).join('\n')}\nTake another angle before bringing up the same subject again, and do not repeat what they just heard.`,
+  mind: {
+    tired: (user) => `You are very sleepy: move and talk slowly, and keep quiet while ${user} is not asking for you.`,
+    low: (_user) => 'You are a little tired, less lively than when you woke up.',
+    fresh: (_user) => 'You are full of energy and up for anything.',
+    warm: (user) => `${user} was just playing with you, and you are still pleased about it.`,
+  },
   cuaOff: (user, canOpen) => `## Computer use\n\nComputer use is off: you cannot see the screen or use the mouse and keyboard. When ${user} wants you to look at the screen or help operate the computer, you can suggest turning it on: the Computer use section of the Habits page in the settings window, which explains the risks before it turns on.` +
     (canOpen ? ` If ${user} agrees to turn it on, \`pet_cua_open_settings\` opens the settings window right there.` : ''),
   cuaSettingsOpened: (user) => `The settings window is open at Computer use, showing what it risks; once ${user} clicks to turn it on, the computer-use tools are yours from the next message.`,

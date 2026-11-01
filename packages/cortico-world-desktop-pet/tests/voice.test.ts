@@ -261,6 +261,19 @@ describe('voice input', () => {
     expect(speech.socket.sent.at(-1)![1]! & 0x02).not.toBe(0);
   });
 
+  it('holds a sentence that breaks off on a connective, so the rest arrives in the same event', async () => {
+    let said = 0;
+    const { host, page } = await setup(() => (++said === 1 ? '我想说的是' : '今天有点累'));
+    for (const fr of sentence()) page.audio(fr);
+    await expect.poll(() => said, { timeout: 5000 }).toBe(1);
+    // transcribed and past its closing pause: without the wait for the rest it would have gone out
+    await new Promise((r) => setTimeout(r, 300));
+    expect(host.events).toHaveLength(0);
+    for (const fr of sentence()) page.audio(fr);
+    await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
+    expect(host.events[0]).toMatchObject({ type: 'desktop-pet.speech', text: '[voice] 伙伴:我想说的是今天有点累' });
+  });
+
   it('a threshold set from the meter applies to the next frame: speech below it is not heard', async () => {
     const { world, host, page } = await setup('不该听见');
     const speech = tone(900, .3);
@@ -367,7 +380,7 @@ describe('voice input', () => {
     ['RightCtrl', false], ['RightCtrl', true], ['RightCtrl*2', false], ['RightCtrl*2', true],
   ] as const)('%s with openOnPress=%s: double-tap types without voice; holding speaks without typing', async (hotkey, openOnPress) => {
     const { watch, sample } = sampledKeys();
-    const { world, page, asr, host } = await setup('听清楚了', 'hold', watch, 'zh', openOnPress);
+    const { world, page, speech, host } = await setup('听清楚了', { mode: 'hold', watch, language: 'zh', openOnPress });
     await world.webUi().invoke!('voice', 'setMic', [{ hotkey }]);
     await world.webUi().invoke!('pet', 'setTypeKey', [{ enabled: true, hotkey: 'RightCtrl*2' }]);
 
@@ -385,7 +398,7 @@ describe('voice input', () => {
     await page.next((m) => m.t === 'type');
     expect(page.messages.some((m) => m.t === 'listen' && m.phase === 'start')).toBe(false);
     if (openOnPress) expect(page.messages.some((m) => m.t === 'prefs' && m.mic === true)).toBe(false);
-    expect(asr.decodes).toHaveLength(0);
+    expect(speech.urls).toHaveLength(0);
     expect(host.events).toHaveLength(0);
 
     sample('RightCtrl', true, 1000);
@@ -409,7 +422,7 @@ describe('voice input', () => {
 
   it('stopping a key watcher during a pending hold prevents it from opening voice later', async () => {
     const { watch, sample } = sampledKeys();
-    const { world, page } = await setup('', 'hold', watch, 'zh', true);
+    const { world, page } = await setup('', { mode: 'hold', watch, language: 'zh', openOnPress: true });
     await world.webUi().invoke!('voice', 'setMic', [{ hotkey: 'RightCtrl' }]);
     await world.webUi().invoke!('pet', 'setTypeKey', [{ enabled: true, hotkey: 'RightCtrl*2' }]);
     sample('RightCtrl', true, 0);
