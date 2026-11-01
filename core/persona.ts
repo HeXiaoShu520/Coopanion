@@ -6,7 +6,8 @@
  *   `delete_file`, as `CONSTITUTION.md` cannot.
  * - The prefix says how Coo keeps its workspace (`MEMORY_NOTE`, Cormini's memory segment, before the workspace
  *   listing): files named for what they hold, dated when tied to a time, older parts moved into `archive/`,
- *   which the listing shows as one line.
+ *   which the listing shows as one line. Into them goes what the person said or what Coo saw; Coo's own
+ *   guesses and earlier lines are not evidence, and an old line is checked before it is leaned on.
  * - Every write Coo makes to its workspace is committed to the workspace's Git repository, one commit
  *   per tool call, so the workspace has a history to look back on and go back to. `blobs/` is left out
  *   of the repository. Without Git (`gitInstalled`) the files are written all the same.
@@ -42,6 +43,10 @@ export const MEMORY_NOTE = [
     + '(partner/food-likes-and-dislikes.md, not partner/notes2.md).',
   '- Before starting a file, look for one on the same subject with glob_files or grep_files and change that one. '
     + 'When a fact changes, rewrite it where it stands; delete what is no longer true.',
+  '- What goes in about the person is what they said, or what you saw or heard more than once. What you guessed, '
+    + 'and what you said yourself, is not evidence however often you said it.',
+  '- What you wrote before can stop being true. Check a line written long ago against what they say or do now, '
+    + 'and rewrite or drop it once it has changed.',
   '- Anything tied to a time has its date in the name: a running log one file per month (log/2026-10.md), one day\'s events by the day.',
   `- When a file grows long, move its older lines into ${ARCHIVE_DIR}/ with move_file (offset and limit); move finished files `
     + `and folders there whole. ${ARCHIVE_DIR}/ shows below as one line, and grep_files still searches it.`,
